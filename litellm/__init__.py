@@ -8,6 +8,7 @@ import os
 from typing import Callable, List, Optional, Dict, Union, Any, Literal, get_args
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.caching.caching import Cache, DualCache, RedisCache, InMemoryCache
+from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -80,6 +81,9 @@ turn_off_message_logging: Optional[bool] = False
 log_raw_request_response: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
+add_user_information_to_llm_headers: Optional[bool] = (
+    None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
+)
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 ## end of callbacks #############
 
@@ -133,7 +137,7 @@ enable_azure_ad_token_refresh: Optional[bool] = False
 ### DEFAULT AZURE API VERSION ###
 AZURE_DEFAULT_API_VERSION = "2024-08-01-preview"  # this is updated to the latest
 ### COHERE EMBEDDINGS DEFAULT TYPE ###
-COHERE_DEFAULT_EMBEDDING_INPUT_TYPE = "search_document"
+COHERE_DEFAULT_EMBEDDING_INPUT_TYPE: COHERE_EMBEDDING_INPUT_TYPES = "search_document"
 ### GUARDRAILS ###
 llamaguard_model_name: Optional[str] = None
 openai_moderations_model_name: Optional[str] = None
@@ -159,9 +163,6 @@ enable_caching_on_provider_specific_optional_params: bool = (
 )
 caching: bool = (
     False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-)
-always_read_redis: bool = (
-    True  # always use redis for rate limiting logic on litellm proxy
 )
 caching_with_models: bool = (
     False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
