@@ -1,31 +1,22 @@
-import asyncio
-import copy
-import json
-import os
-from copy import deepcopy
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import List, Optional, Union
 
-import httpx
 from openai import OpenAI
 
 import litellm
-from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.OpenAI.openai import OpenAIChatCompletion
+from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.types.llms.azure_ai import ImageEmbeddingRequest
-from litellm.types.utils import Embedding, EmbeddingResponse
-from litellm.utils import convert_to_model_response_object, is_base64_encoded
+from litellm.types.utils import EmbeddingResponse
+from litellm.utils import convert_to_model_response_object
 
 from .cohere_transformation import AzureAICohereConfig
 
 
 class AzureAIEmbedding(OpenAIChatCompletion):
-
     def _process_response(
         self,
         image_embedding_responses: Optional[List],
@@ -74,7 +65,10 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = AsyncHTTPHandler(timeout=timeout, concurrent_limit=1)
+            client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.AZURE_AI,
+                params={"timeout": timeout},
+            )
 
         url = "{}/images/embeddings".format(api_base)
 
@@ -86,7 +80,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         embedding_response = response.json()
         embedding_headers = dict(response.headers)
-        returned_response: litellm.EmbeddingResponse = convert_to_model_response_object(  # type: ignore
+        returned_response: EmbeddingResponse = convert_to_model_response_object(  # type: ignore
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -101,7 +95,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         data: ImageEmbeddingRequest,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str],
         api_base: Optional[str],
@@ -129,7 +123,7 @@ class AzureAIEmbedding(OpenAIChatCompletion):
 
         embedding_response = response.json()
         embedding_headers = dict(response.headers)
-        returned_response: litellm.EmbeddingResponse = convert_to_model_response_object(  # type: ignore
+        returned_response: EmbeddingResponse = convert_to_model_response_object(  # type: ignore
             response_object=embedding_response,
             model_response_object=model_response,
             response_type="embedding",
@@ -150,7 +144,6 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         api_base: Optional[str] = None,
         client=None,
     ) -> EmbeddingResponse:
-
         (
             image_embeddings_request,
             v1_embeddings_request,
@@ -210,13 +203,14 @@ class AzureAIEmbedding(OpenAIChatCompletion):
         input: List,
         timeout: float,
         logging_obj,
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         optional_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client=None,
         aembedding=None,
-    ) -> litellm.EmbeddingResponse:
+        max_retries: Optional[int] = None,
+    ) -> EmbeddingResponse:
         """
         - Separate image url from text
         -> route image url call to `/image/embeddings`

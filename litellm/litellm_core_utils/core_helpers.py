@@ -1,14 +1,16 @@
 # What is this?
 ## Helper utilities
-import os
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
+
+import httpx
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.openai import AllMessageValues
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 
@@ -52,26 +54,58 @@ def map_finish_reason(
     return finish_reason
 
 
-def remove_index_from_tool_calls(messages, tool_calls):
-    for tool_call in tool_calls:
-        if "index" in tool_call:
-            tool_call.pop("index")
-
-    for message in messages:
-        if "tool_calls" in message:
-            tool_calls = message["tool_calls"]
-            for tool_call in tool_calls:
-                if "index" in tool_call:
-                    tool_call.pop("index")
+def remove_index_from_tool_calls(
+    messages: Optional[List[AllMessageValues]],
+):
+    if messages is not None:
+        for message in messages:
+            _tool_calls = message.get("tool_calls")
+            if _tool_calls is not None and isinstance(_tool_calls, list):
+                for tool_call in _tool_calls:
+                    if (
+                        isinstance(tool_call, dict) and "index" in tool_call
+                    ):  # Type guard to ensure it's a dict
+                        tool_call.pop("index", None)
 
     return
+
+
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: dict, metadata: dict
+) -> dict:
+    """
+    Helper to get litellm metadata for spend tracking
+
+    PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
+    and user_api_key values are in 'metadata'.
+    """
+    potential_spend_tracking_metadata_substring = "user_api_key"
+    for key, value in metadata.items():
+        if potential_spend_tracking_metadata_substring in key:
+            litellm_metadata[key] = value
+    return litellm_metadata
 
 
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
+
+    Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
-    return kwargs.get("litellm_params", {}).get("metadata", {})
+    litellm_params = kwargs.get("litellm_params", {})
+    if litellm_params:
+        metadata = litellm_params.get("metadata", {})
+        litellm_metadata = litellm_params.get("litellm_metadata", {})
+        if litellm_metadata and metadata:
+            litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(
+                litellm_metadata, metadata
+            )
+        if litellm_metadata:
+            return litellm_metadata
+        elif metadata:
+            return metadata
+
+    return {}
 
 
 # Helper functions used for OTEL logging
@@ -80,7 +114,7 @@ def _get_parent_otel_span_from_kwargs(
 ) -> Union[Span, None]:
     try:
         if kwargs is None:
-            raise ValueError("kwargs is None")
+            return None
         litellm_params = kwargs.get("litellm_params")
         _metadata = kwargs.get("metadata") or {}
         if "litellm_parent_otel_span" in _metadata:
@@ -99,3 +133,28 @@ def _get_parent_otel_span_from_kwargs(
             "Error in _get_parent_otel_span_from_kwargs: " + str(e)
         )
         return None
+
+
+def process_response_headers(response_headers: Union[httpx.Headers, dict]) -> dict:
+    from litellm.types.utils import OPENAI_RESPONSE_HEADERS
+
+    openai_headers = {}
+    processed_headers = {}
+    additional_headers = {}
+
+    for k, v in response_headers.items():
+        if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
+            openai_headers[k] = v
+        if k.startswith(
+            "llm_provider-"
+        ):  # return raw provider headers (incl. openai-compatible ones)
+            processed_headers[k] = v
+        else:
+            additional_headers["{}-{}".format("llm_provider", k)] = v
+
+    additional_headers = {
+        **openai_headers,
+        **processed_headers,
+        **additional_headers,
+    }
+    return additional_headers

@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import httpx
 
-from litellm.proxy.proxy_server import app, initialize_pass_through_endpoints
+from litellm.proxy.proxy_server import initialize_pass_through_endpoints
 
 
 # Mock the async_client used in the pass_through_request function
@@ -25,7 +25,8 @@ async def mock_request(*args, **kwargs):
     return mock_response
 
 
-def remove_rerank_route():
+def remove_rerank_route(app):
+
     for route in app.routes:
         if route.path == "/v1/rerank" and "POST" in route.methods:
             app.routes.remove(route)
@@ -35,7 +36,11 @@ def remove_rerank_route():
 
 @pytest.fixture
 def client():
-    remove_rerank_route()  # remove the native rerank route on the litellm proxy - since we're testing the pass through endpoints
+    from litellm.proxy.proxy_server import app
+
+    remove_rerank_route(
+        app=app
+    )  # remove the native rerank route on the litellm proxy - since we're testing the pass through endpoints
     return TestClient(app)
 
 
@@ -145,8 +150,9 @@ async def test_pass_through_endpoint_rerank(client):
     [(True, 0, 429), (True, 1, 200), (False, 0, 200)],
 )
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_limit):
-    client = TestClient(app)
+async def test_pass_through_endpoint_rpm_limit(
+    client, auth, expected_error_code, rpm_limit
+):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
@@ -214,9 +220,11 @@ async def test_pass_through_endpoint_rpm_limit(auth, expected_error_code, rpm_li
 async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
     auth, expected_error_code, rpm_limit
 ):
+    from litellm.proxy.proxy_server import app
 
     client = TestClient(app)
     import litellm
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import ProxyLogging, hash_token, user_api_key_cache
 
@@ -253,7 +261,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         pass_through_endpoints = [
             {
                 "path": "/api/public/ingestion",
-                "target": "https://cloud.langfuse.com/api/public/ingestion",
+                "target": "https://us.cloud.langfuse.com/api/public/ingestion",
                 "auth": auth,
                 "custom_auth_parser": "langfuse",
                 "headers": {
@@ -322,35 +330,49 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
             litellm.proxy.proxy_server, "proxy_logging_obj", original_proxy_logging_obj
         )
 
-
 @pytest.mark.asyncio
-async def test_pass_through_endpoint_anthropic(client):
+async def test_pass_through_endpoint_bing(client, monkeypatch):
     import litellm
-    from litellm import Router
-    from litellm.adapters.anthropic_adapter import anthropic_adapter
 
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                    "mock_response": "Hey, how's it going?",
+    captured_requests = []
+
+    async def mock_bing_request(*args, **kwargs):
+
+        captured_requests.append((args, kwargs))
+        mock_response = httpx.Response(
+            200,
+            json={
+                "_type": "SearchResponse",
+                "queryContext": {"originalQuery": "bob barker"},
+                "webPages": {
+                    "webSearchUrl": "https://www.bing.com/search?q=bob+barker",
+                    "totalEstimatedMatches": 12000000,
+                    "value": [],
                 },
-            }
-        ]
-    )
+            },
+        )
+        mock_response.request = Mock(spec=httpx.Request)
+        return mock_response
 
-    setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr("httpx.AsyncClient.request", mock_bing_request)
 
     # Define a pass-through endpoint
     pass_through_endpoints = [
         {
-            "path": "/v1/test-messages",
-            "target": anthropic_adapter,
-            "headers": {"litellm_user_api_key": "my-test-header"},
-        }
+            "path": "/bing/search",
+            "target": "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US",
+            "headers": {"Ocp-Apim-Subscription-Key": "XX"},
+            "forward_headers": True,
+            # Additional settings
+            "merge_query_params": True,
+            "auth": True,
+        },
+        {
+            "path": "/bing/search-no-merge-params",
+            "target": "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US",
+            "headers": {"Ocp-Apim-Subscription-Key": "XX"},
+            "forward_headers": True,
+        },
     ]
 
     # Initialize the pass-through endpoint
@@ -361,17 +383,17 @@ async def test_pass_through_endpoint_anthropic(client):
     general_settings.update({"pass_through_endpoints": pass_through_endpoints})
     setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
 
-    _json_data = {
-        "model": "gpt-3.5-turbo",
-        "messages": [{"role": "user", "content": "Who are you?"}],
-    }
+    # Make 2 requests thru the pass-through endpoint
+    client.get("/bing/search?q=bob+barker")
+    client.get("/bing/search-no-merge-params?q=bob+barker")
 
-    # Make a request to the pass-through endpoint
-    response = client.post(
-        "/v1/test-messages", json=_json_data, headers={"my-test-header": "my-test-key"}
-    )
-
-    print("JSON response: ", _json_data)
+    first_transformed_url = captured_requests[0][1]["url"]
+    second_transformed_url = captured_requests[1][1]["url"]
 
     # Assert the response
-    assert response.status_code == 200
+    assert (
+        first_transformed_url
+        == "https://api.bing.microsoft.com/v7.0/search?q=bob+barker&setLang=en-US&mkt=en-US"
+        and second_transformed_url
+        == "https://api.bing.microsoft.com/v7.0/search?setLang=en-US&mkt=en-US"
+    )

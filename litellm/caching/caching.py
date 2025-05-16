@@ -8,43 +8,29 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import ast
-import asyncio
 import hashlib
-import inspect
-import io
 import json
-import logging
 import time
 import traceback
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from openai.types.audio.transcription_create_params import TranscriptionCreateParams
-from openai.types.chat.completion_create_params import (
-    CompletionCreateParamsNonStreaming,
-    CompletionCreateParamsStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsNonStreaming as TextCompletionCreateParamsNonStreaming,
-)
-from openai.types.completion_create_params import (
-    CompletionCreateParamsStreaming as TextCompletionCreateParamsStreaming,
-)
-from openai.types.embedding_create_params import EmbeddingCreateParams
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.rerank import RerankRequest
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import EmbeddingResponse, all_litellm_params
 
 from .base_cache import BaseCache
 from .disk_cache import DiskCache
-from .dual_cache import DualCache
+from .dual_cache import DualCache  # noqa
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
 from .redis_cache import RedisCache
+from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
@@ -103,16 +89,16 @@ class Cache:
         s3_aws_session_token: Optional[str] = None,
         s3_config: Optional[Any] = None,
         s3_path: Optional[str] = None,
-        redis_semantic_cache_use_async=False,
-        redis_semantic_cache_embedding_model="text-embedding-ada-002",
+        redis_semantic_cache_embedding_model: str = "text-embedding-ada-002",
+        redis_semantic_cache_index_name: Optional[str] = None,
         redis_flush_size: Optional[int] = None,
         redis_startup_nodes: Optional[List] = None,
-        disk_cache_dir=None,
+        disk_cache_dir: Optional[str] = None,
         qdrant_api_base: Optional[str] = None,
         qdrant_api_key: Optional[str] = None,
         qdrant_collection_name: Optional[str] = None,
         qdrant_quantization_config: Optional[str] = None,
-        qdrant_semantic_cache_embedding_model="text-embedding-ada-002",
+        qdrant_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         **kwargs,
     ):
         """
@@ -162,22 +148,31 @@ class Cache:
             None. Cache is set as a litellm param
         """
         if type == LiteLLMCacheType.REDIS:
-            self.cache: BaseCache = RedisCache(
-                host=host,
-                port=port,
-                password=password,
-                redis_flush_size=redis_flush_size,
-                startup_nodes=redis_startup_nodes,
-                **kwargs,
-            )
+            if redis_startup_nodes:
+                self.cache: BaseCache = RedisClusterCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    startup_nodes=redis_startup_nodes,
+                    **kwargs,
+                )
+            else:
+                self.cache = RedisCache(
+                    host=host,
+                    port=port,
+                    password=password,
+                    redis_flush_size=redis_flush_size,
+                    **kwargs,
+                )
         elif type == LiteLLMCacheType.REDIS_SEMANTIC:
             self.cache = RedisSemanticCache(
                 host=host,
                 port=port,
                 password=password,
                 similarity_threshold=similarity_threshold,
-                use_async=redis_semantic_cache_use_async,
                 embedding_model=redis_semantic_cache_embedding_model,
+                index_name=redis_semantic_cache_index_name,
                 **kwargs,
             )
         elif type == LiteLLMCacheType.QDRANT_SEMANTIC:
@@ -211,9 +206,9 @@ class Cache:
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
-            litellm.success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_success_callback("cache")
         if "cache" not in litellm._async_success_callback:
-            litellm._async_success_callback.append("cache")
+            litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
@@ -233,26 +228,25 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-    def get_cache_key(self, *args, **kwargs) -> str:
+    def get_cache_key(self, **kwargs) -> str:
         """
         Get the cache key for the given arguments.
 
         Args:
-            *args: args to litellm.completion() or embedding()
             **kwargs: kwargs to litellm.completion() or embedding()
 
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
         cache_key = ""
-        verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
+        # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
 
         preset_cache_key = self._get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs = self._get_relevant_args_to_use_for_cache_key()
+        combined_kwargs = ModelParamHelper._get_all_llm_api_params()
         litellm_param_kwargs = all_litellm_params
         for param in kwargs:
             if param in combined_kwargs:
@@ -271,10 +265,8 @@ class Cache:
                     cache_key += f"{str(param)}: {str(param_value)}"
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
-        hashed_cache_key = self._get_hashed_cache_key(cache_key)
-        hashed_cache_key = self._add_redis_namespace_to_cache_key(
-            hashed_cache_key, **kwargs
-        )
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
+        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         self._set_preset_cache_key_in_kwargs(
             preset_cache_key=hashed_cache_key, **kwargs
         )
@@ -361,77 +353,8 @@ class Cache:
             if "litellm_params" in kwargs:
                 kwargs["litellm_params"]["preset_cache_key"] = preset_cache_key
 
-    def _get_relevant_args_to_use_for_cache_key(self) -> Set[str]:
-        """
-        Gets the supported kwargs for each call type and combines them
-        """
-        chat_completion_kwargs = self._get_litellm_supported_chat_completion_kwargs()
-        text_completion_kwargs = self._get_litellm_supported_text_completion_kwargs()
-        embedding_kwargs = self._get_litellm_supported_embedding_kwargs()
-        transcription_kwargs = self._get_litellm_supported_transcription_kwargs()
-        rerank_kwargs = self._get_litellm_supported_rerank_kwargs()
-        exclude_kwargs = self._get_kwargs_to_exclude_from_cache_key()
-
-        combined_kwargs = chat_completion_kwargs.union(
-            text_completion_kwargs,
-            embedding_kwargs,
-            transcription_kwargs,
-            rerank_kwargs,
-        )
-        combined_kwargs = combined_kwargs.difference(exclude_kwargs)
-        return combined_kwargs
-
-    def _get_litellm_supported_chat_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported chat completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_chat_completion_kwargs = set(
-            CompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(CompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_chat_completion_kwargs
-
-    def _get_litellm_supported_text_completion_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported text completion kwargs
-
-        This follows the OpenAI API Spec
-        """
-        all_text_completion_kwargs = set(
-            TextCompletionCreateParamsNonStreaming.__annotations__.keys()
-        ).union(set(TextCompletionCreateParamsStreaming.__annotations__.keys()))
-        return all_text_completion_kwargs
-
-    def _get_litellm_supported_rerank_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported rerank kwargs
-        """
-        return set(RerankRequest.model_fields.keys())
-
-    def _get_litellm_supported_embedding_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported embedding kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(EmbeddingCreateParams.__annotations__.keys())
-
-    def _get_litellm_supported_transcription_kwargs(self) -> Set[str]:
-        """
-        Get the litellm supported transcription kwargs
-
-        This follows the OpenAI API Spec
-        """
-        return set(TranscriptionCreateParams.__annotations__.keys())
-
-    def _get_kwargs_to_exclude_from_cache_key(self) -> Set[str]:
-        """
-        Get the kwargs to exclude from the cache key
-        """
-        return set(["metadata"])
-
-    def _get_hashed_cache_key(self, cache_key: str) -> str:
+    @staticmethod
+    def _get_hashed_cache_key(cache_key: str) -> str:
         """
         Get the hashed cache key for the given cache key.
 
@@ -449,7 +372,7 @@ class Cache:
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
 
-    def _add_redis_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
+    def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
         If a redis namespace is provided, add it to the cache key
 
@@ -460,7 +383,12 @@ class Cache:
         Returns:
             str: The final hashed cache key with the redis namespace.
         """
-        namespace = kwargs.get("metadata", {}).get("redis_namespace") or self.namespace
+        dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
+        namespace = (
+            dynamic_cache_control.get("namespace")
+            or kwargs.get("metadata", {}).get("redis_namespace")
+            or self.namespace
+        )
         if namespace:
             hash_hex = f"{namespace}:{hash_hex}"
         verbose_logger.debug("Final hashed key: %s", hash_hex)
@@ -479,7 +407,7 @@ class Cache:
                     }
                 ]
             }
-            time.sleep(0.02)
+            time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
     def _get_cache_logic(
         self,
@@ -520,7 +448,7 @@ class Cache:
             return cached_response
         return cached_result
 
-    def get_cache(self, *args, **kwargs):
+    def get_cache(self, **kwargs):
         """
         Retrieves the cached result for the given arguments.
 
@@ -532,18 +460,21 @@ class Cache:
             The cached result if it exists, otherwise None.
         """
         try:  # never block execution
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get(
-                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                max_age = (
+                    cache_control_args.get("s-maxage")
+                    or cache_control_args.get("s-max-age")
+                    or float("inf")
                 )
+                cached_result = self.cache.get_cache(cache_key, messages=messages)
                 cached_result = self.cache.get_cache(cache_key, messages=messages)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
@@ -552,29 +483,28 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    async def async_get_cache(self, *args, **kwargs):
+    async def async_get_cache(self, **kwargs):
         """
         Async get cache implementation.
 
         Used for embedding calls in async wrapper
         """
+
         try:  # never block execution
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
 
             kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 cache_control_args = kwargs.get("cache", {})
                 max_age = cache_control_args.get(
                     "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                 )
-                cached_result = await self.cache.async_get_cache(
-                    cache_key, *args, **kwargs
-                )
+                cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
@@ -582,7 +512,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, *args, **kwargs):
+    def _add_cache_logic(self, result, **kwargs):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -590,7 +520,7 @@ class Cache:
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
-                cache_key = self.get_cache_key(*args, **kwargs)
+                cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
                     result = result.model_dump_json()
@@ -612,7 +542,7 @@ class Cache:
         except Exception as e:
             raise e
 
-    def add_cache(self, result, *args, **kwargs):
+    def add_cache(self, result, **kwargs):
         """
         Adds a result to the cache.
 
@@ -624,41 +554,58 @@ class Cache:
             None
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             cache_key, cached_data, kwargs = self._add_cache_logic(
-                result=result, *args, **kwargs
+                result=result, **kwargs
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    async def async_add_cache(self, result, *args, **kwargs):
+    async def async_add_cache(self, result, **kwargs):
         """
         Async implementation of add_cache
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
             if self.type == "redis" and self.redis_flush_size is not None:
                 # high traffic - fill in results in memory and then flush
-                await self.batch_cache_write(result, *args, **kwargs)
+                await self.batch_cache_write(result, **kwargs)
             else:
                 cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=result, *args, **kwargs
+                    result=result, **kwargs
                 )
+
                 await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    async def async_add_cache_pipeline(self, result, *args, **kwargs):
+    def add_embedding_response_to_cache(
+        self,
+        result: EmbeddingResponse,
+        input: str,
+        kwargs: dict,
+        idx_in_result_data: int = 0,
+    ) -> Tuple[str, dict, dict]:
+        preset_cache_key = self.get_cache_key(**{**kwargs, "input": input})
+        kwargs["cache_key"] = preset_cache_key
+        embedding_response = result.data[idx_in_result_data]
+        cache_key, cached_data, kwargs = self._add_cache_logic(
+            result=embedding_response,
+            **kwargs,
+        )
+        return cache_key, cached_data, kwargs
+
+    async def async_add_cache_pipeline(self, result, **kwargs):
         """
         Async implementation of add_cache for Embedding calls
 
         Does a bulk write, to prevent using too many clients
         """
         try:
-            if self.should_use_cache(*args, **kwargs) is not True:
+            if self.should_use_cache(**kwargs) is not True:
                 return
 
             # set default ttl if not set
@@ -666,30 +613,32 @@ class Cache:
                 kwargs["ttl"] = self.ttl
 
             cache_list = []
-            for idx, i in enumerate(kwargs["input"]):
-                preset_cache_key = self.get_cache_key(*args, **{**kwargs, "input": i})
-                kwargs["cache_key"] = preset_cache_key
-                embedding_response = result.data[idx]
-                cache_key, cached_data, kwargs = self._add_cache_logic(
-                    result=embedding_response,
-                    *args,
-                    **kwargs,
+            if isinstance(kwargs["input"], list):
+                for idx, i in enumerate(kwargs["input"]):
+                    (
+                        cache_key,
+                        cached_data,
+                        kwargs,
+                    ) = self.add_embedding_response_to_cache(result, i, kwargs, idx)
+                    cache_list.append((cache_key, cached_data))
+            elif isinstance(kwargs["input"], str):
+                cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(
+                    result, kwargs["input"], kwargs
                 )
                 cache_list.append((cache_key, cached_data))
-            async_set_cache_pipeline = getattr(
-                self.cache, "async_set_cache_pipeline", None
-            )
-            if async_set_cache_pipeline:
-                await async_set_cache_pipeline(cache_list=cache_list, **kwargs)
-            else:
-                tasks = []
-                for val in cache_list:
-                    tasks.append(self.cache.async_set_cache(val[0], val[1], **kwargs))
-                await asyncio.gather(*tasks)
+
+            await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+            # if async_set_cache_pipeline:
+            #     await async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+            # else:
+            #     tasks = []
+            #     for val in cache_list:
+            #         tasks.append(self.cache.async_set_cache(val[0], val[1], **kwargs))
+            #     await asyncio.gather(*tasks)
         except Exception as e:
             verbose_logger.exception(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
 
-    def should_use_cache(self, *args, **kwargs):
+    def should_use_cache(self, **kwargs):
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -707,10 +656,8 @@ class Cache:
                 return True
         return False
 
-    async def batch_cache_write(self, result, *args, **kwargs):
-        cache_key, cached_data, kwargs = self._add_cache_logic(
-            result=result, *args, **kwargs
-        )
+    async def batch_cache_write(self, result, **kwargs):
+        cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
     async def ping(self):
@@ -782,9 +729,9 @@ def enable_cache(
     if "cache" not in litellm.input_callback:
         litellm.input_callback.append("cache")
     if "cache" not in litellm.success_callback:
-        litellm.success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_success_callback("cache")
     if "cache" not in litellm._async_success_callback:
-        litellm._async_success_callback.append("cache")
+        litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
 
     if litellm.cache is None:
         litellm.cache = Cache(

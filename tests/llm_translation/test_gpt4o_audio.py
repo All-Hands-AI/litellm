@@ -56,13 +56,20 @@ async def test_audio_output_from_model(stream):
     if stream is False:
         audio_format = "wav"
     litellm.set_verbose = False
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=stream,
-    )
+    try:
+        completion = await litellm.acompletion(
+            model="gpt-4o-audio-preview",
+            modalities=["text", "audio"],
+            audio={"voice": "alloy", "format": "pcm16"},
+            messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
+            stream=stream,
+        )
+    except litellm.Timeout as e:
+        print(e)
+        pytest.skip("Skipping test due to timeout")
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
 
     if stream is True:
         await check_streaming_response(completion)
@@ -77,37 +84,45 @@ async def test_audio_output_from_model(stream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-async def test_audio_input_to_model(stream):
+@pytest.mark.parametrize("model", ["gpt-4o-audio-preview"]) # "gpt-4o-audio-preview", 
+async def test_audio_input_to_model(stream, model):
     # Fetch the audio file and convert it to a base64 encoded string
     audio_format = "pcm16"
     if stream is False:
         audio_format = "wav"
-    litellm.set_verbose = True
+    litellm._turn_on_debug()
+    litellm.drop_params = True
     url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
     response = requests.get(url)
     response.raise_for_status()
     wav_data = response.content
     encoded_string = base64.b64encode(wav_data).decode("utf-8")
-
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": audio_format},
-        stream=stream,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What is in this recording?"},
-                    {
-                        "type": "input_audio",
-                        "input_audio": {"data": encoded_string, "format": "wav"},
-                    },
-                ],
-            },
-        ],
-    )
-
+    try:
+        completion = await litellm.acompletion(
+            model=model,
+            modalities=["text", "audio"],
+            audio={"voice": "alloy", "format": audio_format},
+            stream=stream,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is in this recording?"},
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": encoded_string, "format": "wav"},
+                        },
+                    ],
+                },
+            ],
+        )
+    except litellm.Timeout as e:
+        print(e)
+        pytest.skip("Skipping test due to timeout")
+    except Exception as e:
+        if "openai-internal" in str(e):
+            pytest.skip("Skipping test due to openai-internal error")
+        raise e
     if stream is True:
         await check_streaming_response(completion)
     else:

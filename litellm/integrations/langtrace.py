@@ -1,14 +1,12 @@
-import traceback
 import json
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import SpanAttributes
+from typing import TYPE_CHECKING, Any, Union
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from litellm.proxy._types import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span
+    Span = Union[_Span, Any]
 else:
     Span = Any
 

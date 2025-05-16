@@ -21,11 +21,11 @@ try:
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
-        def __getitem__(self, key: K) -> V: ...  # noqa
+        def __getitem__(self, key: K) -> V:
+            ...  # noqa
 
-        def get(  # noqa
-            self, key: K, default: Optional[V] = None
-        ) -> Optional[V]: ...  # pragma: no cover
+        def get(self, key: K, default: Optional[V] = None) -> Optional[V]:  # noqa
+            ...  # pragma: no cover
 
     class OpenAIRequestResponseResolver:
         def __call__(
@@ -173,18 +173,14 @@ except Exception:
 
 #### What this does ####
 #    On success, logs events to Langfuse
-import os
 import traceback
-from datetime import datetime
-
-import requests
 
 
 class WeightsBiasesLogger:
     # Class variables or attributes
     def __init__(self):
         try:
-            import wandb
+            pass
         except Exception:
             raise Exception(
                 "\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m"

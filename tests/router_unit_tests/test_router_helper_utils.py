@@ -12,6 +12,8 @@ from litellm import Router
 import pytest
 import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
+from create_mock_standard_logging_payload import create_standard_logging_payload
+from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
@@ -165,19 +167,46 @@ async def test_router_schedule_acompletion(model_list):
 
 
 @pytest.mark.asyncio
-async def test_router_arealtime(model_list):
-    """Test if the '_arealtime' function is working correctly"""
-    import litellm
+async def test_router_schedule_atext_completion(model_list):
+    """Test if the 'schedule_atext_completion' function is working correctly"""
+    from litellm.types.utils import TextCompletionResponse
 
     router = Router(model_list=model_list)
-    with patch.object(litellm, "_arealtime", AsyncMock()) as mock_arealtime:
-        mock_arealtime.return_value = "I'm fine, thank you!"
-        await router._arealtime(
+    with patch.object(
+        router, "_atext_completion", AsyncMock()
+    ) as mock_atext_completion:
+        mock_atext_completion.return_value = TextCompletionResponse()
+        response = await router.atext_completion(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            prompt="Hello, how are you?",
+            priority=1,
         )
+        mock_atext_completion.assert_awaited_once()
+        assert "priority" not in mock_atext_completion.call_args.kwargs
 
-        mock_arealtime.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_router_schedule_factory(model_list):
+    """Test if the 'schedule_atext_completion' function is working correctly"""
+    from litellm.types.utils import TextCompletionResponse
+
+    router = Router(model_list=model_list)
+    with patch.object(
+        router, "_atext_completion", AsyncMock()
+    ) as mock_atext_completion:
+        mock_atext_completion.return_value = TextCompletionResponse()
+        response = await router._schedule_factory(
+            model="gpt-3.5-turbo",
+            args=(
+                "gpt-3.5-turbo",
+                "Hello, how are you?",
+            ),
+            priority=1,
+            kwargs={},
+            original_function=router.atext_completion,
+        )
+        mock_atext_completion.assert_awaited_once()
+        assert "priority" not in mock_atext_completion.call_args.kwargs
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -215,16 +244,11 @@ async def test_router_function_with_retries(model_list, sync_mode):
         "mock_response": "I'm fine, thank you!",
         "num_retries": 0,
     }
-    if sync_mode:
-        response = router.function_with_retries(
-            original_function=router._completion,
-            **data,
-        )
-    else:
-        response = await router.async_function_with_retries(
-            original_function=router._acompletion,
-            **data,
-        )
+    response = await router.async_function_with_retries(
+        original_function=router._acompletion,
+        **data,
+    )
+
     assert response.choices[0].message.content == "I'm fine, thank you!"
 
 
@@ -298,18 +322,6 @@ def test_update_kwargs_with_default_litellm_params(model_list):
     assert kwargs["metadata"]["key2"] == "value2"
 
 
-def test_get_async_openai_model_client(model_list):
-    """Test if the '_get_async_openai_model_client' function is working correctly"""
-    router = Router(model_list=model_list)
-    deployment = router.get_deployment_by_model_group_name(
-        model_group_name="gpt-3.5-turbo"
-    )
-    model_client = router._get_async_openai_model_client(
-        deployment=deployment, kwargs={}
-    )
-    assert model_client is not None
-
-
 def test_get_timeout(model_list):
     """Test if the '_get_timeout' function is working correctly"""
     router = Router(model_list=model_list)
@@ -366,7 +378,8 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
     import time
 
     router = Router(model_list=model_list)
-
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -374,6 +387,7 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
             },
             "model_info": {"id": 100},
         },
+        "standard_logging_object": standard_logging_payload,
     }
     response = litellm.ModelResponse(
         model="gpt-3.5-turbo",
@@ -396,7 +410,8 @@ async def test_deployment_callback_on_success(model_list, sync_mode):
     assert tpm_key is not None
 
 
-def test_deployment_callback_on_failure(model_list):
+@pytest.mark.asyncio
+async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
     import time
 
@@ -417,6 +432,18 @@ def test_deployment_callback_on_failure(model_list):
     )
     assert isinstance(result, bool)
     assert result is False
+
+    model_response = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+        mock_response="I'm fine, thank you!",
+    )
+    result = await router.async_deployment_callback_on_failure(
+        kwargs=kwargs,
+        completion_response=model_response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
 
 
 def test_log_retry(model_list):
@@ -452,11 +479,17 @@ def test_update_usage(model_list):
 
 
 @pytest.mark.parametrize(
-    "finish_reason, expected_error", [("content_filter", True), ("stop", False)]
+    "finish_reason, expected_fallback", [("content_filter", True), ("stop", False)]
 )
-def test_should_raise_content_policy_error(model_list, finish_reason, expected_error):
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
+def test_should_raise_content_policy_error(
+    model_list, finish_reason, expected_fallback, fallback_type
+):
     """Test if the '_should_raise_content_policy_error' function is working correctly"""
-    router = Router(model_list=model_list)
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=["gpt-4o"] if fallback_type == "default" else None,
+    )
 
     assert (
         router._should_raise_content_policy_error(
@@ -472,10 +505,14 @@ def test_should_raise_content_policy_error(model_list, finish_reason, expected_e
                 usage={"total_tokens": 100},
             ),
             kwargs={
-                "content_policy_fallbacks": [{"gpt-3.5-turbo": "gpt-4o"}],
+                "content_policy_fallbacks": (
+                    [{"gpt-3.5-turbo": "gpt-4o"}]
+                    if fallback_type == "model-specific"
+                    else None
+                )
             },
         )
-        is expected_error
+        is expected_fallback
     )
 
 
@@ -853,6 +890,31 @@ def test_flush_cache(model_list):
     assert router.cache.get_cache("test") is None
 
 
+def test_discard(model_list):
+    """
+    Test that discard properly removes a Router from the callback lists
+    """
+    litellm.callbacks = []
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm._async_failure_callback = []
+    litellm.input_callback = []
+    litellm.service_callback = []
+
+    router = Router(model_list=model_list)
+    router.discard()
+
+    # Verify all callback lists are empty
+    assert len(litellm.callbacks) == 0
+    assert len(litellm.success_callback) == 0
+    assert len(litellm.failure_callback) == 0
+    assert len(litellm._async_success_callback) == 0
+    assert len(litellm._async_failure_callback) == 0
+    assert len(litellm.input_callback) == 0
+    assert len(litellm.service_callback) == 0
+
+
 def test_initialize_assistants_endpoint(model_list):
     """Test if the 'initialize_assistants_endpoint' function is working correctly"""
     router = Router(model_list=model_list)
@@ -960,6 +1022,18 @@ def test_replace_model_in_jsonl(model_list):
             "openai/gpt-3.5-turbo",
             "openai/gpt-3.5-turbo",
         ),
+        (
+            "bedrock/meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "bedrock/meta.llama3-70b",
+        ),
+        (
+            "meta.llama3-70b",
+            "*meta.llama3*",
+            "bedrock/meta.llama3-*",
+            "meta.llama3-70b",
+        ),
     ],
 )
 def test_pattern_match_deployment_set_model_name(
@@ -986,3 +1060,95 @@ def test_pattern_match_deployment_set_model_name(
 
     print(updated_model)  # Expected output: "openai/fo::hi:static::hello"
     assert updated_model == expected_model
+
+    updated_models = pattern_router._return_pattern_matched_deployments(
+        match,
+        deployments=[
+            {
+                "model_name": model_name,
+                "litellm_params": {"model": litellm_model},
+            }
+        ],
+    )
+
+    for model in updated_models:
+        assert model["litellm_params"]["model"] == expected_model
+
+
+@pytest.mark.asyncio
+async def test_pass_through_moderation_endpoint_factory(model_list):
+    router = Router(model_list=model_list)
+    response = await router._pass_through_moderation_endpoint_factory(
+        original_function=litellm.amoderation,
+        input="this is valid good text",
+        model=None,
+    )
+    assert response is not None
+
+
+@pytest.mark.parametrize(
+    "has_default_fallbacks, expected_result",
+    [(True, True), (False, False)],
+)
+def test_has_default_fallbacks(model_list, has_default_fallbacks, expected_result):
+    router = Router(
+        model_list=model_list,
+        default_fallbacks=(
+            ["my-default-fallback-model"] if has_default_fallbacks else None
+        ),
+    )
+    assert router._has_default_fallbacks() is expected_result
+
+
+def test_add_optional_pre_call_checks(model_list):
+    router = Router(model_list=model_list)
+
+    router.add_optional_pre_call_checks(["prompt_caching"])
+    assert len(litellm.callbacks) > 0
+
+
+@pytest.mark.asyncio
+async def test_async_callback_filter_deployments(model_list):
+    from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+    router = Router(model_list=model_list)
+
+    healthy_deployments = router.get_model_list(model_name="gpt-3.5-turbo")
+
+    new_healthy_deployments = await router.async_callback_filter_deployments(
+        model="gpt-3.5-turbo",
+        healthy_deployments=healthy_deployments,
+        messages=[],
+        parent_otel_span=None,
+    )
+
+    assert len(new_healthy_deployments) == len(healthy_deployments)
+
+
+def test_cached_get_model_group_info(model_list):
+    """Test if the '_cached_get_model_group_info' function is working correctly with LRU cache"""
+    router = Router(model_list=model_list)
+
+    # First call - should hit the actual function
+    result1 = router._cached_get_model_group_info("gpt-3.5-turbo")
+
+    # Second call with same argument - should hit the cache
+    result2 = router._cached_get_model_group_info("gpt-3.5-turbo")
+
+    # Verify results are the same
+    assert result1 == result2
+
+    # Verify the cache info shows hits
+    cache_info = router._cached_get_model_group_info.cache_info()
+    assert cache_info.hits > 0  # Should have at least one cache hit
+
+
+def test_init_responses_api_endpoints(model_list):
+    """Test if the '_init_responses_api_endpoints' function is working correctly"""
+    from typing import Callable
+    router = Router(model_list=model_list)
+
+    assert router.aget_responses is not None
+    assert isinstance(router.aget_responses, Callable)
+    assert router.adelete_responses is not None
+    assert isinstance(router.adelete_responses, Callable)

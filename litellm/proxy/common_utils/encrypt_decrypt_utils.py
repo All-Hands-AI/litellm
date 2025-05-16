@@ -1,20 +1,27 @@
 import base64
 import os
+from typing import Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 
-LITELLM_SALT_KEY = os.getenv("LITELLM_SALT_KEY", None)
-verbose_proxy_logger.debug(
-    "LITELLM_SALT_KEY is None using master_key to encrypt/decrypt secrets stored in DB"
-)
 
-
-def encrypt_value_helper(value: str):
+def _get_salt_key():
     from litellm.proxy.proxy_server import master_key
 
-    signing_key = LITELLM_SALT_KEY
-    if LITELLM_SALT_KEY is None:
-        signing_key = master_key
+    salt_key = os.getenv("LITELLM_SALT_KEY", None)
+
+    if salt_key is None:
+        verbose_proxy_logger.debug(
+            "LITELLM_SALT_KEY is None using master_key to encrypt/decrypt secrets stored in DB"
+        )
+
+        salt_key = master_key
+
+    return salt_key
+
+
+def encrypt_value_helper(value: str, new_encryption_key: Optional[str] = None):
+    signing_key = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -32,12 +39,10 @@ def encrypt_value_helper(value: str):
         raise e
 
 
-def decrypt_value_helper(value: str):
-    from litellm.proxy.proxy_server import master_key
-
-    signing_key = LITELLM_SALT_KEY
-    if LITELLM_SALT_KEY is None:
-        signing_key = master_key
+def decrypt_value_helper(
+    value: str, exception_type: Literal["debug", "error"] = "error"
+):
+    signing_key = _get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -48,11 +53,13 @@ def decrypt_value_helper(value: str):
         # if it's not str - do not decrypt it, return the value
         return value
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error decrypting value, Did your master_key/salt key change recently? : {value}\nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
-        )
+        error_message = f"Error decrypting value, Did your master_key/salt key change recently? \nError: {str(e)}\nSet permanent salt key - https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+        if exception_type == "debug":
+            verbose_proxy_logger.debug(error_message)
+            return None
+        verbose_proxy_logger.error(error_message)
         # [Non-Blocking Exception. - this should not block decrypting other values]
-        pass
+        return None
 
 
 def encrypt_value(value: str, signing_key: str):

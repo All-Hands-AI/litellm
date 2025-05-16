@@ -4,6 +4,16 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Azure OpenAI
+
+## Overview
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Service provides REST API access to OpenAI's powerful language models including o1, o1-mini, GPT-4o, GPT-4o mini, GPT-4 Turbo with Vision, GPT-4, GPT-3.5-Turbo, and Embeddings model series |
+| Provider Route on LiteLLM | `azure/`, [`azure/o_series/`](#azure-o-series-models) |
+| Supported Operations | [`/chat/completions`](#azure-openai-chat-completion-models), [`/completions`](#azure-instruct-models), [`/embeddings`](../embedding/supported_embedding#azure-openai-embedding-models), [`/audio/speech`](#azure-text-to-speech-tts), [`/audio/transcriptions`](../audio_transcription), `/fine_tuning`, [`/batches`](#azure-batches-api), `/files`, [`/images`](../image_generation#azure-openai-image-generation-models) |
+| Link to Provider Doc | [Azure OpenAI ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/overview)
+
 ## API Keys, Params
 api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
@@ -281,14 +291,15 @@ response = completion(
 )
 ```
 
-## Azure O1 Models
+## O-Series Models
 
-| Model Name          | Function Call                                      |
-|---------------------|----------------------------------------------------|
-| o1-mini | `response = completion(model="azure/<your deployment name>", messages=messages)` |
-| o1-preview | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+Azure OpenAI O-Series models are supported on LiteLLM. 
 
-Set `litellm.enable_preview_features = True` to use Azure O1 Models with streaming support. 
+LiteLLM routes any deployment name with `o1` or `o3` in the model name, to the O-Series [transformation](https://github.com/BerriAI/litellm/blob/91ed05df2962b8eee8492374b048d27cc144d08c/litellm/llms/azure/chat/o1_transformation.py#L4) logic.
+
+To set this explicitly, set `model` to `azure/o_series/<your-deployment-name>`.
+
+**Automatic Routing**
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -296,60 +307,112 @@ Set `litellm.enable_preview_features = True` to use Azure O1 Models with streami
 ```python
 import litellm
 
-litellm.enable_preview_features = True # 👈 KEY CHANGE
-
-response = litellm.completion(
-    model="azure/<your deployment name>",
-    messages=[{"role": "user", "content": "What is the weather like in Boston?"}],
-    stream=True
-)
-
-for chunk in response:
-    print(chunk)
+litellm.completion(model="azure/my-o3-deployment", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o3' in the deployment name
 ```
 </TabItem>
-<TabItem value="proxy" label="Proxy">
+<TabItem value="proxy" label="PROXY">
 
-1. Setup config.yaml
 ```yaml
 model_list:
-  - model_name: o1-mini
+  - model_name: o3-mini
     litellm_params:
-      model: azure/o1-mini
-      api_base: "os.environ/AZURE_API_BASE"
-      api_key: "os.environ/AZURE_API_KEY"
-      api_version: "os.environ/AZURE_API_VERSION"
-
-litellm_settings:
-    enable_preview_features: true # 👈 KEY CHANGE
+      model: azure/o3-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
 ```
 
-2. Start proxy 
+</TabItem>
+</Tabs>
+
+**Explicit Routing**
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+litellm.completion(model="azure/o_series/my-random-deployment-name", messages=[{"role": "user", "content": "Hello, world!"}]) # 👈 Note: 'o_series/' in the deployment name
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: o3-mini
+    litellm_params:
+      model: azure/o_series/my-random-deployment-name
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+```
+</TabItem>
+</Tabs>
+
+
+## Azure Audio Model
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+response = completion(
+    model="azure/azure-openai-4o-audio",
+    messages=[
+      {
+        "role": "user",
+        "content": "I want to try out speech to speech"
+      }
+    ],
+    modalities=["text","audio"],
+    audio={"voice": "alloy", "format": "wav"}
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-openai-4o-audio
+    litellm_params:
+      model: azure/azure-openai-4o-audio
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: os.environ/AZURE_API_VERSION
+```
+
+2. Start proxy
 
 ```bash
 litellm --config /path/to/config.yaml
 ```
 
-3. Test it 
+3. Test it!
 
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:4000"
-)
 
-response = client.chat.completions.create(model="o1-mini", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-],
-stream=True)
-
-for chunk in response:
-    print(chunk)
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "azure-openai-4o-audio",
+    "messages": [{"role": "user", "content": "I want to try out speech to speech"}],
+    "modalities": ["text","audio"],
+    "audio": {"voice": "alloy", "format": "wav"}
+  }'
 ```
+
+
 </TabItem>
 </Tabs>
 
@@ -415,12 +478,12 @@ response.stream_to_file(speech_file_path)
 ## **Authentication**
 
 
-### Entrata ID - use `azure_ad_token`
+### Entra ID - use `azure_ad_token`
 
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
 Step 1 - Download Azure CLI 
-Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
 ```shell
 brew update && brew install azure-cli
 ```
@@ -482,7 +545,7 @@ model_list:
 </TabItem>
 </Tabs>
 
-### Entrata ID - use tenant_id, client_id, client_secret
+### Entra ID - use tenant_id, client_id, client_secret
 
 Here is an example of setting up `tenant_id`, `client_id`, `client_secret` in your litellm proxy `config.yaml`
 ```yaml
@@ -518,6 +581,39 @@ Example video of using `tenant_id`, `client_id`, `client_secret` with LiteLLM Pr
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/70d3f219ee7f4e5d84778b7f17bba506?sid=04b8ff29-485f-4cb8-929e-6b392722f36d" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+### Entra ID - use client_id, username, password
+
+Here is an example of setting up `client_id`, `azure_username`, `azure_password` in your litellm proxy `config.yaml`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      client_id: os.environ/AZURE_CLIENT_ID
+      azure_username: os.environ/AZURE_USERNAME
+      azure_password: os.environ/AZURE_PASSWORD
+```
+
+Test it 
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ]
+    }
+'
+```
+
+
 ### Azure AD Token Refresh - `DefaultAzureCredential`
 
 Use this if you want to use Azure `DefaultAzureCredential` for Authentication on your requests
@@ -544,6 +640,16 @@ response = completion(
 </TabItem>
 <TabItem value="proxy" label="PROXY config.yaml">
 
+1. Add relevant env vars
+
+```bash
+export AZURE_TENANT_ID=""
+export AZURE_CLIENT_ID=""
+export AZURE_CLIENT_SECRET=""
+```
+
+2. Setup config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -555,8 +661,467 @@ litellm_settings:
     enable_azure_ad_token_refresh: true # 👈 KEY CHANGE
 ```
 
+3. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
 </TabItem>
 </Tabs>
+
+
+## **Azure Batches API**
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Batches API |
+| `custom_llm_provider` on LiteLLM | `azure/` |
+| Supported Operations | `/v1/batches`, `/v1/files` |
+| Azure OpenAI Batches API | [Azure OpenAI Batches API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/batch) |
+| Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Batch API Requests |
+
+
+### Quick Start
+
+Just add the azure env vars to your environment. 
+
+```bash
+export AZURE_API_KEY=""
+export AZURE_API_BASE=""
+```
+
+<Tabs>
+<TabItem value="proxy" label="LiteLLM PROXY Server">
+
+**1. Upload a File**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the client
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-api-key"
+)
+
+batch_input_file = client.files.create(
+    file=open("mydata.jsonl", "rb"),
+    purpose="batch",
+    extra_body={"custom_llm_provider": "azure"}
+)
+file_id = batch_input_file.id
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+</TabItem>
+</Tabs>
+
+**Example File Format**
+```json
+{"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
+{"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
+{"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "REPLACE-WITH-MODEL-DEPLOYMENT-NAME", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
+```
+
+**2. Create a Batch Request**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+batch = client.batches.create( # re use client from above
+    input_file_id=file_id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"description": "My batch job"},
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl http://localhost:4000/v1/batches \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-abc123",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h"
+  }'
+```
+</TabItem>
+</Tabs>
+
+**3. Retrieve a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+retrieved_batch = client.batches.retrieve(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl http://localhost:4000/v1/batches/batch_abc123 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+```
+
+</TabItem>
+</Tabs>
+
+**4. Cancel a Batch**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+cancelled_batch = client.batches.cancel(
+    batch.id,
+    extra_body={"custom_llm_provider": "azure"}
+)
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl http://localhost:4000/v1/batches/batch_abc123/cancel \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST
+```
+
+</TabItem>
+</Tabs>
+
+**5. List Batches**
+
+<Tabs>
+<TabItem value="sdk" label="OpenAI Python SDK">
+
+```python
+client.batches.list(extra_body={"custom_llm_provider": "azure"})
+```
+
+</TabItem>
+<TabItem value="curl" label="Curl">
+
+```bash
+curl http://localhost:4000/v1/batches?limit=2 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json"
+```
+</TabItem>
+</Tabs>
+</TabItem>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+**1. Create File for Batch Completion**
+
+```python
+from litellm
+import os 
+
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+
+file_name = "azure_batch_completions.jsonl"
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+file_path = os.path.join(_current_dir, file_name)
+file_obj = await litellm.acreate_file(
+    file=open(file_path, "rb"),
+    purpose="batch",
+    custom_llm_provider="azure",
+)
+print("Response from creating file=", file_obj)
+```
+
+**2. Create Batch Request**
+
+```python
+create_batch_response = await litellm.acreate_batch(
+    completion_window="24h",
+    endpoint="/v1/chat/completions",
+    input_file_id=batch_input_file_id,
+    custom_llm_provider="azure",
+    metadata={"key1": "value1", "key2": "value2"},
+)
+
+print("response from litellm.create_batch=", create_batch_response)
+```
+
+**3. Retrieve Batch and File Content**
+
+```python
+retrieved_batch = await litellm.aretrieve_batch(
+    batch_id=create_batch_response.id, 
+    custom_llm_provider="azure"
+)
+print("retrieved batch=", retrieved_batch)
+
+# Get file content
+file_content = await litellm.afile_content(
+    file_id=batch_input_file_id, 
+    custom_llm_provider="azure"
+)
+print("file content = ", file_content)
+```
+
+**4. List Batches**
+
+```python
+list_batches_response = litellm.list_batches(
+    custom_llm_provider="azure", 
+    limit=2
+)
+print("list_batches_response=", list_batches_response)
+```
+
+</TabItem>
+</Tabs>
+
+### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
+
+
+### [BETA] Loadbalance Multiple Azure Deployments 
+In your config.yaml, set `enable_loadbalancing_on_batch_endpoints: true`
+
+```yaml
+model_list:
+  - model_name: "batch-gpt-4o-mini"
+    litellm_params:
+      model: "azure/gpt-4o-mini"
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+    model_info:
+      mode: batch
+
+litellm_settings:
+  enable_loadbalancing_on_batch_endpoints: true # 👈 KEY CHANGE
+```
+
+Note: This works on `{PROXY_BASE_URL}/v1/files` and `{PROXY_BASE_URL}/v1/batches`.
+Note: Response is in the OpenAI-format. 
+
+1. Upload a file 
+
+Just set `model: batch-gpt-4o-mini` in your .jsonl.
+
+```bash
+curl http://localhost:4000/v1/files \
+    -H "Authorization: Bearer sk-1234" \
+    -F purpose="batch" \
+    -F file="@mydata.jsonl"
+```
+
+**Example File**
+
+Note: `model` should be your azure deployment name.
+
+```json
+{"custom_id": "task-0", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was Microsoft founded?"}]}}
+{"custom_id": "task-1", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "When was the first XBOX released?"}]}}
+{"custom_id": "task-2", "method": "POST", "url": "/chat/completions", "body": {"model": "batch-gpt-4o-mini", "messages": [{"role": "system", "content": "You are an AI assistant that helps people find information."}, {"role": "user", "content": "What is Altair Basic?"}]}}
+```
+
+Expected Response (OpenAI-compatible)
+
+```bash
+{"id":"file-f0be81f654454113a922da60acb0eea6",...}
+```
+
+2. Create a batch 
+
+```bash
+curl http://0.0.0.0:4000/v1/batches \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input_file_id": "file-f0be81f654454113a922da60acb0eea6",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h",
+    "model: "batch-gpt-4o-mini"
+  }'
+```
+
+Expected Response: 
+
+```bash
+{"id":"batch_94e43f0a-d805-477d-adf9-bbb9c50910ed",...}
+```
+
+3. Retrieve a batch 
+
+```bash
+curl http://0.0.0.0:4000/v1/batches/batch_94e43f0a-d805-477d-adf9-bbb9c50910ed \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json" \
+```
+
+
+Expected Response: 
+
+```
+{"id":"batch_94e43f0a-d805-477d-adf9-bbb9c50910ed",...}
+```
+
+4. List batch
+
+```bash
+curl http://0.0.0.0:4000/v1/batches?limit=2 \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+Expected Response:
+
+```bash
+{"data":[{"id":"batch_R3V...}
+```
+
+
+## **Azure Responses API**
+
+| Property | Details |
+|-------|-------|
+| Description | Azure OpenAI Responses API |
+| `custom_llm_provider` on LiteLLM | `azure/` |
+| Supported Operations | `/v1/responses`|
+| Azure OpenAI Responses API | [Azure OpenAI Responses API ↗](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/responses?tabs=python-secure) |
+| Cost Tracking, Logging Support | ✅ LiteLLM will log, track cost for Responses API Requests |
+| Supported OpenAI Params | ✅ All OpenAI params are supported, [See here](https://github.com/BerriAI/litellm/blob/0717369ae6969882d149933da48eeb8ab0e691bd/litellm/llms/openai/responses/transformation.py#L23) |
+
+## Usage
+
+## Create a model response
+
+<Tabs>
+<TabItem value="litellm-sdk" label="LiteLLM SDK">
+
+#### Non-streaming
+
+```python showLineNumbers title="Azure Responses API"
+import litellm
+
+# Non-streaming response
+response = litellm.responses(
+    model="azure/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100,
+    api_key=os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
+    api_base="https://litellm8397336933.openai.azure.com/",
+    api_version="2023-03-15-preview",
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers title="Azure Responses API"
+import litellm
+
+# Streaming response
+response = litellm.responses(
+    model="azure/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True,
+    api_key=os.getenv("AZURE_RESPONSES_OPENAI_API_KEY"),
+    api_base="https://litellm8397336933.openai.azure.com/",
+    api_version="2023-03-15-preview",
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+<TabItem value="proxy" label="OpenAI SDK with LiteLLM Proxy">
+
+First, add this to your litellm proxy config.yaml:
+```yaml showLineNumbers title="Azure Responses API"
+model_list:
+  - model_name: o1-pro
+    litellm_params:
+      model: azure/o1-pro
+      api_key: os.environ/AZURE_RESPONSES_OPENAI_API_KEY
+      api_base: https://litellm8397336933.openai.azure.com/
+      api_version: 2023-03-15-preview
+```
+
+Start your LiteLLM proxy:
+```bash
+litellm --config /path/to/config.yaml
+
+# RUNNING on http://0.0.0.0:4000
+```
+
+Then use the OpenAI SDK pointed to your proxy:
+
+#### Non-streaming
+```python showLineNumbers
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Non-streaming response
+response = client.responses.create(
+    model="o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn."
+)
+
+print(response)
+```
+
+#### Streaming
+```python showLineNumbers
+from openai import OpenAI
+
+# Initialize client with your proxy URL
+client = OpenAI(
+    base_url="http://localhost:4000",  # Your proxy URL
+    api_key="your-api-key"             # Your proxy API key
+)
+
+# Streaming response
+response = client.responses.create(
+    model="o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+</Tabs>
+
 
 
 ## Advanced
@@ -628,32 +1193,24 @@ print(response)
 ```
 
 
-### Parallel Function calling
+### Tool Calling / Function Calling
+
 See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
+
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
 ```python
 # set Azure env variables
 import os
+import litellm
+import json
+
 os.environ['AZURE_API_KEY'] = "" # litellm reads AZURE_API_KEY from .env and sends the request
 os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test-v-1.openai.azure.com/"
 os.environ['AZURE_API_VERSION'] = "2023-07-01-preview"
 
-import litellm
-import json
-# Example dummy function hard coded to return the same weather
-# In production, this could be your backend API or an external API
-def get_current_weather(location, unit="fahrenheit"):
-    """Get the current weather in a given location"""
-    if "tokyo" in location.lower():
-        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
-    elif "san francisco" in location.lower():
-        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
-    elif "paris" in location.lower():
-        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
-    else:
-        return json.dumps({"location": location, "temperature": "unknown"})
-
-## Step 1: send the conversation and available functions to the model
-messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
 tools = [
     {
         "type": "function",
@@ -677,7 +1234,7 @@ tools = [
 
 response = litellm.completion(
     model="azure/chatgpt-functioncalling", # model = azure/<your-azure-deployment-name>
-    messages=messages,
+    messages=[{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}],
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
 )
@@ -686,4 +1243,85 @@ response_message = response.choices[0].message
 tool_calls = response.choices[0].message.tool_calls
 print("\nTool Choice:\n", tool_calls)
 ```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
 
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-functioncalling
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+```
+
+2. Start proxy
+
+```bash
+litellm --config config.yaml
+```
+
+3. Test it
+
+```bash
+curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-d '{
+    "model": "azure-gpt-3.5",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hey, how'\''s it going? Thinking long and hard before replying - what is the meaning of the world and life itself"
+        }
+    ]
+}'
+```
+
+
+
+
+</TabItem>
+</Tabs>
+### Spend Tracking for Azure OpenAI Models (PROXY)
+
+Set base model for cost tracking azure image-gen call
+
+#### Image Generation 
+
+```yaml
+model_list: 
+  - model_name: dall-e-3
+    litellm_params:
+        model: azure/dall-e-3-test
+        api_version: 2023-06-01-preview
+        api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+        api_key: os.environ/AZURE_API_KEY
+        base_model: dall-e-3 # 👈 set dall-e-3 as base model
+    model_info:
+        mode: image_generation
+```
+
+#### Chat Completions / Embeddings
+
+**Problem**: Azure returns `gpt-4` in the response when `azure/gpt-4-1106-preview` is used. This leads to inaccurate cost tracking
+
+**Solution** ✅ :  Set `base_model` on your config so litellm uses the correct model for calculating azure cost
+
+Get the base model name from [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+Example config with `base_model`
+```yaml
+model_list:
+  - model_name: azure-gpt-3.5
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      base_model: azure/gpt-4-1106-preview
+```

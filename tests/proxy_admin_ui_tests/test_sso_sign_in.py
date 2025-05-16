@@ -61,6 +61,9 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
     Tests that a new SSO Sign In user is by default given an 'INTERNAL_USER_VIEW_ONLY' role
     """
     import uuid
+    import litellm
+
+    litellm._turn_on_debug()
 
     # Generate a unique user ID
     unique_user_id = str(uuid.uuid4())
@@ -101,7 +104,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(f"/ui/?userID={unique_user_id}")
+        assert response.headers["location"].startswith(f"/ui/?login=success")
 
         # Verify that the user was added to the database
         user = await prisma_client.db.litellm_usertable.find_first(
@@ -174,7 +177,7 @@ async def test_auth_callback_new_user_with_sso_default(
 
         # Assert the response
         assert response.status_code == 303
-        assert response.headers["location"].startswith(f"/ui/?userID={unique_user_id}")
+        assert response.headers["location"].startswith(f"/ui/?login=success")
 
         # Verify that the user was added to the database
         user = await prisma_client.db.litellm_usertable.find_first(

@@ -35,13 +35,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.caching import (
-    Cache,
-    QdrantSemanticCache,
-    RedisCache,
-    RedisSemanticCache,
-    S3Cache,
-)
+from litellm.caching.caching import S3Cache
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
@@ -53,6 +47,7 @@ from litellm.types.utils import (
     ModelResponse,
     TextCompletionResponse,
     TranscriptionResponse,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -72,9 +67,7 @@ class CachingHandlerResponse(BaseModel):
 
     cached_result: Optional[Any] = None
     final_embedding_cached_response: Optional[EmbeddingResponse] = None
-    embedding_all_elements_cache_hit: bool = (
-        False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    )
+    embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
 
 
 class LLMCachingHandler:
@@ -137,7 +130,7 @@ class LLMCachingHandler:
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
-                print_verbose("Checking Cache")
+                verbose_logger.debug("Checking Async Cache")
                 cached_result = await self._retrieve_from_cache(
                     call_type=call_type,
                     kwargs=kwargs,
@@ -145,7 +138,7 @@ class LLMCachingHandler:
                 )
 
                 if cached_result is not None and not isinstance(cached_result, list):
-                    print_verbose("Cache Hit!")
+                    verbose_logger.debug("Cache Hit!")
                     cache_hit = True
                     end_time = datetime.datetime.now()
                     model, _, _, _ = litellm.get_llm_provider(
@@ -215,6 +208,7 @@ class LLMCachingHandler:
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     )
+        verbose_logger.debug(f"CACHE RESULT: {cached_result}")
         return CachingHandlerResponse(
             cached_result=cached_result,
             final_embedding_cached_response=final_embedding_cached_response,
@@ -233,19 +227,25 @@ class LLMCachingHandler:
         from litellm.utils import CustomStreamWrapper
 
         args = args or ()
+        new_kwargs = kwargs.copy()
+        new_kwargs.update(
+            convert_args_to_kwargs(
+                self.original_function,
+                args,
+            )
+        )
         cached_result: Optional[Any] = None
         if litellm.cache is not None and self._is_call_type_supported_by_cache(
             original_function=original_function
         ):
-            print_verbose("Checking Cache")
-            cached_result = litellm.cache.get_cache(*args, **kwargs)
+            print_verbose("Checking Sync Cache")
+            cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
                     pass
                 else:
                     call_type = original_function.__name__
-
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -340,6 +340,7 @@ class LLMCachingHandler:
             )
             final_embedding_cached_response._hidden_params["cache_hit"] = True
 
+            prompt_tokens = 0
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
                 if cr is not None:
@@ -348,6 +349,19 @@ class LLMCachingHandler:
                         index=idx,
                         object="embedding",
                     )
+                    if isinstance(original_kwargs_input[idx], str):
+                        from litellm.utils import token_counter
+
+                        prompt_tokens += token_counter(
+                            text=original_kwargs_input[idx], count_response_tokens=True
+                        )
+            ## USAGE
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                total_tokens=prompt_tokens,
+            )
+            final_embedding_cached_response.usage = usage
         if len(remaining_list) == 0:
             # LOG SUCCESS
             cache_hit = True
@@ -382,6 +396,13 @@ class LLMCachingHandler:
             )
             return final_embedding_cached_response, embedding_all_elements_cache_hit
         return final_embedding_cached_response, embedding_all_elements_cache_hit
+
+    def combine_usage(self, usage1: Usage, usage2: Usage) -> Usage:
+        return Usage(
+            prompt_tokens=usage1.prompt_tokens + usage2.prompt_tokens,
+            completion_tokens=usage1.completion_tokens + usage2.completion_tokens,
+            total_tokens=usage1.total_tokens + usage2.total_tokens,
+        )
 
     def _combine_cached_embedding_response_with_api_result(
         self,
@@ -422,6 +443,17 @@ class LLMCachingHandler:
         _caching_handler_response.final_embedding_cached_response._response_ms = (
             end_time - start_time
         ).total_seconds() * 1000
+
+        ## USAGE
+        if (
+            _caching_handler_response.final_embedding_cached_response.usage is not None
+            and embedding_response.usage is not None
+        ):
+            _caching_handler_response.final_embedding_cached_response.usage = self.combine_usage(
+                usage1=_caching_handler_response.final_embedding_cached_response.usage,
+                usage2=embedding_response.usage,
+            )
+
         return _caching_handler_response.final_embedding_cached_response
 
     def _async_log_cache_hit_on_callbacks(
@@ -475,14 +507,23 @@ class LLMCachingHandler:
         if litellm.cache is None:
             return None
 
+        new_kwargs = kwargs.copy()
+        new_kwargs.update(
+            convert_args_to_kwargs(
+                self.original_function,
+                args,
+            )
+        )
         cached_result: Optional[Any] = None
-        if call_type == CallTypes.aembedding.value and isinstance(
-            kwargs["input"], list
-        ):
+        if call_type == CallTypes.aembedding.value:
+            if isinstance(new_kwargs["input"], str):
+                new_kwargs["input"] = [new_kwargs["input"]]
+            elif not isinstance(new_kwargs["input"], list):
+                raise ValueError("input must be a string or a list")
             tasks = []
-            for idx, i in enumerate(kwargs["input"]):
+            for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(
-                    *args, **{**kwargs, "input": i}
+                    **{**new_kwargs, "input": i}
                 )
                 tasks.append(litellm.cache.async_get_cache(cache_key=preset_cache_key))
             cached_result = await asyncio.gather(*tasks)
@@ -493,9 +534,9 @@ class LLMCachingHandler:
                     cached_result = None
         else:
             if litellm.cache._supports_async() is True:
-                cached_result = await litellm.cache.async_get_cache(*args, **kwargs)
+                cached_result = await litellm.cache.async_get_cache(**new_kwargs)
             else:  # for s3 caching. [NOT RECOMMENDED IN PROD - this will slow down responses since boto3 is sync]
-                cached_result = litellm.cache.get_cache(*args, **kwargs)
+                cached_result = litellm.cache.get_cache(**new_kwargs)
         return cached_result
 
     def _convert_cached_result_to_model_response(
@@ -535,12 +576,7 @@ class LLMCachingHandler:
         Returns:
             Optional[Any]:
         """
-        from litellm.utils import (
-            CustomStreamWrapper,
-            convert_to_model_response_object,
-            convert_to_streaming_response,
-            convert_to_streaming_response_async,
-        )
+        from litellm.utils import convert_to_model_response_object
 
         if (
             call_type == CallTypes.acompletion.value
@@ -580,6 +616,7 @@ class LLMCachingHandler:
                 model_response_object=EmbeddingResponse(),
                 response_type="embedding",
             )
+
         elif (
             call_type == CallTypes.arerank.value or call_type == CallTypes.rerank.value
         ) and isinstance(cached_result, dict):
@@ -603,6 +640,13 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
+
+        if (
+            hasattr(cached_result, "_hidden_params")
+            and cached_result._hidden_params is not None
+            and isinstance(cached_result._hidden_params, dict)
+        ):
+            cached_result._hidden_params["cache_hit"] = True
         return cached_result
 
     def _convert_cached_stream_response(
@@ -658,12 +702,20 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        kwargs.update(convert_args_to_kwargs(result, original_function, kwargs, args))
+
         if litellm.cache is None:
             return
+
+        new_kwargs = kwargs.copy()
+        new_kwargs.update(
+            convert_args_to_kwargs(
+                original_function,
+                args,
+            )
+        )
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(
-            original_function=original_function, kwargs=kwargs
+            original_function=original_function, kwargs=new_kwargs
         ):
             if (
                 isinstance(result, litellm.ModelResponse)
@@ -673,29 +725,28 @@ class LLMCachingHandler:
             ):
                 if (
                     isinstance(result, EmbeddingResponse)
-                    and isinstance(kwargs["input"], list)
                     and litellm.cache is not None
                     and not isinstance(
                         litellm.cache.cache, S3Cache
                     )  # s3 doesn't support bulk writing. Exclude.
                 ):
                     asyncio.create_task(
-                        litellm.cache.async_add_cache_pipeline(result, **kwargs)
+                        litellm.cache.async_add_cache_pipeline(result, **new_kwargs)
                     )
                 elif isinstance(litellm.cache.cache, S3Cache):
                     threading.Thread(
                         target=litellm.cache.add_cache,
                         args=(result,),
-                        kwargs=kwargs,
+                        kwargs=new_kwargs,
                     ).start()
                 else:
                     asyncio.create_task(
                         litellm.cache.async_add_cache(
-                            result.model_dump_json(), **kwargs
+                            result.model_dump_json(), **new_kwargs
                         )
                     )
             else:
-                asyncio.create_task(litellm.cache.async_add_cache(result, **kwargs))
+                asyncio.create_task(litellm.cache.async_add_cache(result, **new_kwargs))
 
     def sync_set_cache(
         self,
@@ -706,16 +757,21 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
-        kwargs.update(
-            convert_args_to_kwargs(result, self.original_function, kwargs, args)
+
+        new_kwargs = kwargs.copy()
+        new_kwargs.update(
+            convert_args_to_kwargs(
+                self.original_function,
+                args,
+            )
         )
         if litellm.cache is None:
             return
 
         if self._should_store_result_in_cache(
-            original_function=self.original_function, kwargs=kwargs
+            original_function=self.original_function, kwargs=new_kwargs
         ):
-            litellm.cache.add_cache(result, **kwargs)
+            litellm.cache.add_cache(result, **new_kwargs)
 
         return
 
@@ -766,6 +822,7 @@ class LLMCachingHandler:
         - Else append the chunk to self.async_streaming_chunks
 
         """
+
         complete_streaming_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = _assemble_complete_response_from_streaming_chunks(
@@ -776,7 +833,6 @@ class LLMCachingHandler:
             streaming_chunks=self.async_streaming_chunks,
             is_async=True,
         )
-
         # if a complete_streaming_response is assembled, add it to the cache
         if complete_streaming_response is not None:
             await self.async_set_cache(
@@ -841,9 +897,9 @@ class LLMCachingHandler:
         }
 
         if litellm.cache is not None:
-            litellm_params["preset_cache_key"] = (
-                litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
-            )
+            litellm_params[
+                "preset_cache_key"
+            ] = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)
         else:
             litellm_params["preset_cache_key"] = None
 
@@ -865,9 +921,7 @@ class LLMCachingHandler:
 
 
 def convert_args_to_kwargs(
-    result: Any,
     original_function: Callable,
-    kwargs: Dict[str, Any],
     args: Optional[Tuple[Any, ...]] = None,
 ) -> Dict[str, Any]:
     # Get the signature of the original function

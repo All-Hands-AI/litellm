@@ -67,7 +67,7 @@ def test_sync_fallbacks():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -78,7 +78,7 @@ def test_sync_fallbacks():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -150,7 +150,7 @@ async def test_async_fallbacks():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -161,7 +161,7 @@ async def test_async_fallbacks():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -349,7 +349,7 @@ def test_dynamic_fallbacks_sync():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -360,7 +360,7 @@ def test_dynamic_fallbacks_sync():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -426,7 +426,7 @@ async def test_dynamic_fallbacks_async():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -437,7 +437,7 @@ async def test_dynamic_fallbacks_async():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -509,7 +509,7 @@ async def test_async_fallbacks_streaming():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -520,7 +520,7 @@ async def test_async_fallbacks_streaming():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -594,7 +594,7 @@ def test_sync_fallbacks_streaming():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -605,7 +605,7 @@ def test_sync_fallbacks_streaming():
             {  # list of model deployments
                 "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -675,7 +675,7 @@ async def test_async_fallbacks_max_retries_per_request():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": "bad-key",
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -686,7 +686,7 @@ async def test_async_fallbacks_max_retries_per_request():
         {  # list of model deployments
             "model_name": "azure/gpt-3.5-turbo-context-fallback",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "azure/chatgpt-v-2",
+                "model": "azure/chatgpt-v-3",
                 "api_key": os.getenv("AZURE_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
                 "api_base": os.getenv("AZURE_API_BASE"),
@@ -757,6 +757,7 @@ async def test_async_fallbacks_max_retries_per_request():
         router.reset()
 
 
+@pytest.mark.flaky(retries=6, delay=2)
 def test_ausage_based_routing_fallbacks():
     try:
         import litellm
@@ -807,13 +808,13 @@ def test_ausage_based_routing_fallbacks():
         model_list = [
             {
                 "model_name": "azure/gpt-4-fast",
-                "litellm_params": get_azure_params("chatgpt-v-2"),
+                "litellm_params": get_azure_params("chatgpt-v-3"),
                 "model_info": {"id": 1},
                 "rpm": AZURE_FAST_RPM,
             },
             {
                 "model_name": "azure/gpt-4-basic",
-                "litellm_params": get_azure_params("chatgpt-v-2"),
+                "litellm_params": get_azure_params("chatgpt-v-3"),
                 "model_info": {"id": 2},
                 "rpm": AZURE_BASIC_RPM,
             },
@@ -824,8 +825,8 @@ def test_ausage_based_routing_fallbacks():
                 "rpm": OPENAI_RPM,
             },
             {
-                "model_name": "anthropic-claude-instant-1.2",
-                "litellm_params": get_anthropic_params("claude-instant-1.2"),
+                "model_name": "anthropic-claude-3-5-haiku-20241022",
+                "litellm_params": get_anthropic_params("claude-3-5-haiku-20241022"),
                 "model_info": {"id": 4},
                 "rpm": ANTHROPIC_RPM,
             },
@@ -834,7 +835,7 @@ def test_ausage_based_routing_fallbacks():
         fallbacks_list = [
             {"azure/gpt-4-fast": ["azure/gpt-4-basic"]},
             {"azure/gpt-4-basic": ["openai-gpt-4"]},
-            {"openai-gpt-4": ["anthropic-claude-instant-1.2"]},
+            {"openai-gpt-4": ["anthropic-claude-3-5-haiku-20241022"]},
         ]
 
         router = Router(
@@ -864,7 +865,7 @@ def test_ausage_based_routing_fallbacks():
         assert response._hidden_params["model_id"] == "1"
 
         for i in range(10):
-            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
+            # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-3-5-haiku-20241022
             response = router.completion(
                 model="azure/gpt-4-fast",
                 messages=messages,
@@ -888,7 +889,7 @@ def test_custom_cooldown_times():
             {  # list of model deployments
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -898,7 +899,7 @@ def test_custom_cooldown_times():
             {  # list of model deployments
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -992,7 +993,7 @@ async def test_service_unavailable_fallbacks(sync_mode):
             {
                 "model_name": "gpt-3.5-turbo-0125-preview",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -1013,7 +1014,7 @@ async def test_service_unavailable_fallbacks(sync_mode):
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
-    assert response.model == "gpt-35-turbo"
+    assert response.model == "gpt-3.5-turbo-0125"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1045,7 +1046,7 @@ async def test_default_model_fallbacks(sync_mode, litellm_module_fallbacks):
             },
         ],
         default_fallbacks=(
-            ["my-good-model"] if litellm_module_fallbacks == False else None
+            ["my-good-model"] if litellm_module_fallbacks is False else None
         ),
     )
 
@@ -1120,9 +1121,10 @@ async def test_client_side_fallbacks_list(sync_mode):
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("content_filter_response_exception", [True, False])
+@pytest.mark.parametrize("fallback_type", ["model-specific", "default"])
 @pytest.mark.asyncio
 async def test_router_content_policy_fallbacks(
-    sync_mode, content_filter_response_exception
+    sync_mode, content_filter_response_exception, fallback_type
 ):
     os.environ["LITELLM_LOG"] = "DEBUG"
 
@@ -1137,9 +1139,9 @@ async def test_router_content_policy_fallbacks(
     router = Router(
         model_list=[
             {
-                "model_name": "claude-2",
+                "model_name": "claude-2.1",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": mock_response,
                 },
@@ -1153,9 +1155,17 @@ async def test_router_content_policy_fallbacks(
                 },
             },
             {
+                "model_name": "my-default-fallback-model",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_key": "",
+                    "mock_response": "This works 2!",
+                },
+            },
+            {
                 "model_name": "my-general-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
@@ -1163,25 +1173,30 @@ async def test_router_content_policy_fallbacks(
             {
                 "model_name": "my-context-window-model",
                 "litellm_params": {
-                    "model": "claude-2",
+                    "model": "claude-2.1",
                     "api_key": "",
                     "mock_response": Exception("Should not have called this."),
                 },
             },
         ],
-        content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}],
-        fallbacks=[{"claude-2": ["my-general-model"]}],
-        context_window_fallbacks=[{"claude-2": ["my-context-window-model"]}],
+        content_policy_fallbacks=(
+            [{"claude-2.1": ["my-fallback-model"]}]
+            if fallback_type == "model-specific"
+            else None
+        ),
+        default_fallbacks=(
+            ["my-default-fallback-model"] if fallback_type == "default" else None
+        ),
     )
 
     if sync_mode is True:
         response = router.completion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
     else:
         response = await router.acompletion(
-            model="claude-2",
+            model="claude-2.1",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
         )
 
@@ -1226,9 +1241,7 @@ async def test_using_default_fallback(sync_mode):
         pytest.fail(f"Expected call to fail we passed model=openai/foo")
     except Exception as e:
         print("got exception = ", e)
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_available.value in str(e)
+        assert "BadRequestError" in str(e)
 
 
 @pytest.mark.parametrize("sync_mode", [False])
@@ -1345,6 +1358,7 @@ def test_router_fallbacks_with_custom_model_costs():
 
     Goal: make sure custom model doesn't override default model costs.
     """
+
     model_list = [
         {
             "model_name": "claude-3-5-sonnet-20240620",
@@ -1398,3 +1412,246 @@ def test_router_fallbacks_with_custom_model_costs():
 
     assert model_info["input_cost_per_token"] == 30
     assert model_info["output_cost_per_token"] == 60
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_router_fallbacks_default_and_model_specific_fallbacks(sync_mode):
+    """
+    Tests to ensure there is not an infinite fallback loop when there is a default fallback and model specific fallback.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "my-bad-model-2",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "bad-key",
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["my-bad-model-2"]}],
+        default_fallbacks=["bad-model"],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        if sync_mode:
+            resp = router.completion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+
+            print(f"resp: {resp}")
+        else:
+            await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            )
+    assert isinstance(
+        exc_info.value, litellm.AuthenticationError
+    ), f"Expected AuthenticationError, but got {type(exc_info.value).__name__}"
+
+
+@pytest.mark.asyncio
+async def test_router_disable_fallbacks_dynamically():
+    from litellm.router import run_async_fallback
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bad-model",
+                "litellm_params": {
+                    "model": "openai/my-bad-model",
+                    "api_key": "my-bad-api-key",
+                },
+            },
+            {
+                "model_name": "good-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ],
+        fallbacks=[{"bad-model": ["good-model"]}],
+        default_fallbacks=["good-model"],
+    )
+
+    with patch.object(
+        router,
+        "log_retry",
+        new=MagicMock(return_value=None),
+    ) as mock_client:
+        try:
+            resp = await router.acompletion(
+                model="bad-model",
+                messages=[{"role": "user", "content": "Hey, how's it going?"}],
+                disable_fallbacks=True,
+            )
+            print(resp)
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_not_called()
+
+
+def test_router_fallbacks_with_model_id():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo", "rpm": 1},
+                "model_info": {
+                    "id": "123",
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        fallbacks=[{"gpt-3.5-turbo": ["123"]}],
+    )
+
+    ## test model id fallback works
+    router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_testing_fallbacks=True,
+    )
+
+
+def test_router_fallbacks_with_wildcard_model_name():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    "mock_response": "Hi this is claude!",
+                },
+            },
+        ],
+        fallbacks=[{"gpt-3.5-turbo": ["claude-3-haiku"]}],
+    )
+
+    response = router.completion(
+        model="openai/gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+    )
+
+    print(response)
+    assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
+
+
+def test_get_fallback_model_group():
+    from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+
+    args = {
+        "fallbacks": [
+            {"gpt-3.5-turbo": ["claude-3-haiku"]},
+            {"*": ["claude-3-sonnet"]},
+        ],
+        "model_group": "openai/gpt-3.5-turbo",
+    }
+    fallback_model_group, _ = get_fallback_model_group(**args)
+    assert fallback_model_group == ["claude-3-haiku"]
+
+
+def test_fallbacks_with_different_messages():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-3-haiku-20240307",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            },
+        ],
+    )
+
+    resp = router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+        fallbacks=[
+            {
+                "model": "claude-3-haiku",
+                "messages": [{"role": "user", "content": "Hey, how's it going?"}],
+            }
+        ],
+    )
+
+    print(resp)
+
+
+@pytest.mark.parametrize("expected_attempted_fallbacks", [0, 1, 3])
+@pytest.mark.asyncio
+async def test_router_attempted_fallbacks_in_response(expected_attempted_fallbacks):
+    """
+    Test that the router returns the correct number of attempted fallbacks in the response
+
+    - Test cases: works on first try, `x-litellm-attempted-fallbacks` is 0
+    - Works on 1st fallback, `x-litellm-attempted-fallbacks` is 1
+    - Works on 3rd fallback, `x-litellm-attempted-fallbacks` is 3
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "working-fake-endpoint",
+                "litellm_params": {
+                    "model": "openai/working-fake-endpoint",
+                    "api_key": "my-fake-key",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app",
+                },
+            },
+            {
+                "model_name": "badly-configured-openai-endpoint",
+                "litellm_params": {
+                    "model": "openai/my-fake-model",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.appzzzzz",
+                },
+            },
+        ],
+        fallbacks=[{"badly-configured-openai-endpoint": ["working-fake-endpoint"]}],
+    )
+
+    if expected_attempted_fallbacks == 0:
+        resp = router.completion(
+            model="working-fake-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        assert (
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
+            == expected_attempted_fallbacks
+        )
+    elif expected_attempted_fallbacks == 1:
+        resp = router.completion(
+            model="badly-configured-openai-endpoint",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        assert (
+            resp._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"]
+            == expected_attempted_fallbacks
+        )

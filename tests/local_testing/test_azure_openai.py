@@ -27,13 +27,13 @@ from respx import MockRouter
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.router import Router
 
 
 @pytest.mark.asyncio()
 @pytest.mark.respx()
-async def test_azure_tenant_id_auth(respx_mock: MockRouter):
+async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
     """
 
     Tests when we set  tenant_id, client_id, client_secret they don't get sent with the request
@@ -46,7 +46,7 @@ async def test_azure_tenant_id_auth(respx_mock: MockRouter):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_base": os.getenv("AZURE_API_BASE"),
                     "tenant_id": os.getenv("AZURE_TENANT_ID"),
                     "client_id": os.getenv("AZURE_CLIENT_ID"),
@@ -74,6 +74,7 @@ async def test_azure_tenant_id_auth(respx_mock: MockRouter):
         created=int(datetime.now().timestamp()),
     )
     litellm.set_verbose = True
+
     mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
         return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
     )
@@ -94,6 +95,6 @@ async def test_azure_tenant_id_auth(respx_mock: MockRouter):
 
         assert json_body == {
             "messages": [{"role": "user", "content": "Hello world!"}],
-            "model": "chatgpt-v-2",
+            "model": "chatgpt-v-3",
             "stream": False,
         }

@@ -93,7 +93,9 @@ async def test_datadog_llm_obs_logging():
 
     for _ in range(2):
         response = await litellm.acompletion(
-            model="gpt-4o", messages=["Hello testing dd llm obs!"], mock_response="hi"
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hello testing dd llm obs!"}],
+            mock_response="hi",
         )
 
         print(response)
@@ -128,14 +130,7 @@ async def test_create_llm_obs_payload():
     assert payload["meta"]["input"]["messages"] == [
         {"role": "user", "content": "Hello, world!"}
     ]
-    assert payload["meta"]["output"]["messages"] == [
-        {
-            "content": "Hi there!",
-            "role": "assistant",
-            "tool_calls": None,
-            "function_call": None,
-        }
-    ]
+    assert payload["meta"]["output"]["messages"][0]["content"] == "Hi there!"
     assert payload["metrics"]["input_tokens"] == 20
     assert payload["metrics"]["output_tokens"] == 10
     assert payload["metrics"]["total_tokens"] == 30

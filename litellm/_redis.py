@@ -17,8 +17,8 @@ from typing import List, Optional, Union
 import redis  # type: ignore
 import redis.asyncio as async_redis  # type: ignore
 
-import litellm
-from litellm import get_secret
+from litellm import get_secret, get_secret_str
+from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
 
 from ._logging import verbose_logger
 
@@ -141,6 +141,13 @@ def _get_redis_client_logic(**env_overrides):
     if _sentinel_nodes is not None and isinstance(_sentinel_nodes, str):
         redis_kwargs["sentinel_nodes"] = json.loads(_sentinel_nodes)
 
+    _sentinel_password: Optional[str] = redis_kwargs.get(
+        "sentinel_password", None
+    ) or get_secret_str("REDIS_SENTINEL_PASSWORD")
+
+    if _sentinel_password is not None:
+        redis_kwargs["sentinel_password"] = _sentinel_password
+
     _service_name: Optional[str] = redis_kwargs.get("service_name", None) or get_secret(  # type: ignore
         "REDIS_SERVICE_NAME"
     )
@@ -176,9 +183,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
                 "REDIS_CLUSTER_NODES environment variable is not valid JSON. Please ensure it's properly formatted."
             )
 
-    verbose_logger.debug(
-        "init_redis_cluster: startup nodes: ", redis_kwargs["startup_nodes"]
-    )
+    verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
     args = _get_redis_cluster_kwargs()
@@ -198,6 +203,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
 def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
 
     if not sentinel_nodes or not service_name:
@@ -208,7 +214,11 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
-    sentinel = redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+    sentinel = redis.Sentinel(
+        sentinel_nodes,
+        socket_timeout=REDIS_SOCKET_TIMEOUT,
+        password=sentinel_password,
+    )
 
     # Return the master instance for the given service
 
@@ -217,6 +227,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     sentinel_nodes = redis_kwargs.get("sentinel_nodes")
+    sentinel_password = redis_kwargs.get("sentinel_password")
     service_name = redis_kwargs.get("service_name")
 
     if not sentinel_nodes or not service_name:
@@ -227,7 +238,11 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     verbose_logger.debug("init_redis_sentinel: sentinel nodes are being initialized.")
 
     # Set up the Sentinel client
-    sentinel = async_redis.Sentinel(sentinel_nodes, socket_timeout=0.1)
+    sentinel = async_redis.Sentinel(
+        sentinel_nodes,
+        socket_timeout=REDIS_SOCKET_TIMEOUT,
+        password=sentinel_password,
+    )
 
     # Return the master instance for the given service
 
@@ -255,7 +270,9 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(**env_overrides) -> async_redis.Redis:
+def get_redis_async_client(
+    **env_overrides,
+) -> async_redis.Redis:
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         args = _get_redis_url_kwargs(client=async_redis.Redis.from_url)
@@ -294,21 +311,23 @@ def get_redis_async_client(**env_overrides) -> async_redis.Redis:
         return _init_async_redis_sentinel(redis_kwargs)
 
     return async_redis.Redis(
-        socket_timeout=5,
         **redis_kwargs,
     )
 
 
 def get_redis_connection_pool(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
+    verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         return async_redis.BlockingConnectionPool.from_url(
-            timeout=5, url=redis_kwargs["url"]
+            timeout=REDIS_CONNECTION_POOL_TIMEOUT, url=redis_kwargs["url"]
         )
     connection_class = async_redis.Connection
-    if "ssl" in redis_kwargs and redis_kwargs["ssl"] is not None:
+    if "ssl" in redis_kwargs:
         connection_class = async_redis.SSLConnection
         redis_kwargs.pop("ssl", None)
         redis_kwargs["connection_class"] = connection_class
     redis_kwargs.pop("startup_nodes", None)
-    return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)
+    return async_redis.BlockingConnectionPool(
+        timeout=REDIS_CONNECTION_POOL_TIMEOUT, **redis_kwargs
+    )

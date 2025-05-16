@@ -6,16 +6,10 @@ import asyncio
 import json
 import os
 import random
-import time
-import traceback
 import types
-import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional
 
-import dotenv  # type: ignore
 import httpx
-import requests  # type: ignore
 from pydantic import BaseModel  # type: ignore
 
 import litellm
@@ -23,16 +17,13 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
-    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.llms.prompt_templates.common_utils import get_content_from_model_response
 from litellm.types.integrations.argilla import (
     SUPPORTED_PAYLOAD_FIELDS,
     ArgillaCredentialsObject,
     ArgillaItem,
-    ArgillaPayload,
 )
 from litellm.types.utils import StandardLoggingPayload
 
@@ -107,7 +98,6 @@ class ArgillaLogger(CustomBatchLogger):
         argilla_dataset_name: Optional[str],
         argilla_base_url: Optional[str],
     ) -> ArgillaCredentialsObject:
-
         _credentials_api_key = argilla_api_key or os.getenv("ARGILLA_API_KEY")
         if _credentials_api_key is None:
             raise Exception("Invalid Argilla API Key given. _credentials_api_key=None.")
@@ -223,7 +213,7 @@ class ArgillaLogger(CustomBatchLogger):
         headers = {"X-Argilla-Api-Key": argilla_api_key}
 
         try:
-            response = requests.post(
+            response = litellm.module_level_client.post(
                 url=url,
                 json=self.log_queue,
                 headers=headers,

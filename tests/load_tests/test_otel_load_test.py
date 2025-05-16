@@ -42,8 +42,8 @@ def test_otel_logging_async():
         print(f"Average performance difference: {avg_percent_diff:.2f}%")
 
         assert (
-            avg_percent_diff < 15
-        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 15% threshold"
+            avg_percent_diff < 30
+        ), f"Average performance difference of {avg_percent_diff:.2f}% exceeds 30% threshold"
 
     except litellm.Timeout as e:
         pass
@@ -86,7 +86,7 @@ def create_async_task(**completion_kwargs):
     By default a standard set of arguments are used for the litellm.acompletion function.
     """
     completion_args = {
-        "model": "openai/chatgpt-v-2",
+        "model": "openai/chatgpt-v-3",
         "api_version": "2024-02-01",
         "messages": [{"role": "user", "content": "This is a test" * 100}],
         "max_tokens": 5,

@@ -5,30 +5,52 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 import copy
 import time
 import types
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _parse_content_for_reasoning,
+)
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    BedrockConverseMessagesProcessor,
+    _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+)
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
+    ChatCompletionSystemMessage,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
+    ChatCompletionUserMessage,
+    OpenAIChatCompletionToolParam,
+    OpenAIMessageContentListBlock,
 )
-from litellm.types.utils import ModelResponse, Usage
-from litellm.utils import CustomStreamWrapper, add_dummy_tool, has_tool_call_blocks
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Function,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
+from litellm.utils import add_dummy_tool, has_tool_call_blocks
 
-from ...prompt_templates.factory import _bedrock_converse_messages_pt, _bedrock_tools_pt
-from ..common_utils import BedrockError, get_bedrock_tool_name
+from ..common_utils import BedrockError, BedrockModelInfo, get_bedrock_tool_name
 
 
-class AmazonConverseConfig:
+class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
     #2 - https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html#conversation-inference-supported-models-features
@@ -38,6 +60,7 @@ class AmazonConverseConfig:
     stopSequences: Optional[List[str]]
     temperature: Optional[int]
     topP: Optional[int]
+    topK: Optional[int]
 
     def __init__(
         self,
@@ -45,11 +68,23 @@ class AmazonConverseConfig:
         stopSequences: Optional[List[str]] = None,
         temperature: Optional[int] = None,
         topP: Optional[int] = None,
+        topK: Optional[int] = None,
     ) -> None:
-        locals_ = locals()
+        locals_ = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
+
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "bedrock_converse"
+
+    @classmethod
+    def get_config_blocks(cls) -> dict:
+        return {
+            "guardrailConfig": GuardrailConfigBlock,
+            "performanceConfig": PerformanceConfigBlock,
+        }
 
     @classmethod
     def get_config(cls):
@@ -82,8 +117,17 @@ class AmazonConverseConfig:
             "response_format",
         ]
 
+        if (
+            "arn" in model
+        ):  # we can't infer the model from the arn, so just add all params
+            supported_params.append("tools")
+            supported_params.append("tool_choice")
+            supported_params.append("thinking")
+            supported_params.append("reasoning_effort")
+            return supported_params
+
         ## Filter out 'cross-region' from model name
-        base_model = self._get_base_model(model)
+        base_model = BedrockModelInfo.get_base_model(model)
 
         if (
             base_model.startswith("anthropic")
@@ -91,13 +135,22 @@ class AmazonConverseConfig:
             or base_model.startswith("cohere")
             or base_model.startswith("meta.llama3-1")
             or base_model.startswith("meta.llama3-2")
+            or base_model.startswith("meta.llama3-3")
+            or base_model.startswith("amazon.nova")
         ):
             supported_params.append("tools")
 
-        if base_model.startswith("anthropic") or base_model.startswith("mistral"):
+        if litellm.utils.supports_tool_choice(
+            model=model, custom_llm_provider=self.custom_llm_provider
+        ):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
+        if (
+            "claude-3-7" in model
+        ):  # [TODO]: move to a 'supports_reasoning_content' param from model cost map
+            supported_params.append("thinking")
+            supported_params.append("reasoning_effort")
         return supported_params
 
     def map_tool_choice_values(
@@ -134,24 +187,97 @@ class AmazonConverseConfig:
     def get_supported_image_types(self) -> List[str]:
         return ["png", "jpeg", "gif", "webp"]
 
-    def map_openai_params(
+    def get_supported_document_types(self) -> List[str]:
+        return ["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]
+
+    def get_all_supported_content_types(self) -> List[str]:
+        return self.get_supported_image_types() + self.get_supported_document_types()
+
+    def _create_json_tool_call_for_response_format(
         self,
+        json_schema: Optional[dict] = None,
+        schema_name: str = "json_tool_call",
+        description: Optional[str] = None,
+    ) -> ChatCompletionToolParam:
+        """
+        Handles creating a tool call for getting responses in JSON format.
+
+        Args:
+            json_schema (Optional[dict]): The JSON schema the response should be in
+
+        Returns:
+            AnthropicMessagesTool: The tool call to send to Anthropic API to get responses in JSON format
+        """
+
+        if json_schema is None:
+            # Anthropic raises a 400 BadRequest error if properties is passed as None
+            # see usage with additionalProperties (Example 5) https://github.com/anthropics/anthropic-cookbook/blob/main/tool_use/extracting_structured_json.ipynb
+            _input_schema = {
+                "type": "object",
+                "additionalProperties": True,
+                "properties": {},
+            }
+        else:
+            _input_schema = json_schema
+
+        tool_param_function_chunk = ChatCompletionToolParamFunctionChunk(
+            name=schema_name, parameters=_input_schema
+        )
+        if description:
+            tool_param_function_chunk["description"] = description
+
+        _tool = ChatCompletionToolParam(
+            type="function",
+            function=tool_param_function_chunk,
+        )
+        return _tool
+
+    def _apply_tool_call_transformation(
+        self,
+        tools: List[OpenAIChatCompletionToolParam],
         model: str,
         non_default_params: dict,
         optional_params: dict,
+    ):
+        optional_params = self._add_tools_to_optional_params(
+            optional_params=optional_params, tools=tools
+        )
+
+        if (
+            "meta.llama3-3-70b-instruct-v1:0" in model
+            and non_default_params.get("stream", False) is True
+        ):
+            optional_params["fake_stream"] = True
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
         drop_params: bool,
-        messages: Optional[List[AllMessageValues]] = None,
     ) -> dict:
+        is_thinking_enabled = self.is_thinking_enabled(non_default_params)
+
         for param, value in non_default_params.items():
-            if param == "response_format":
+            if param == "response_format" and isinstance(value, dict):
+                ignore_response_format_types = ["text"]
+                if value["type"] in ignore_response_format_types:  # value is a no-op
+                    continue
+
                 json_schema: Optional[dict] = None
                 schema_name: str = ""
+                description: Optional[str] = None
                 if "response_schema" in value:
                     json_schema = value["response_schema"]
                     schema_name = "json_tool_call"
                 elif "json_schema" in value:
                     json_schema = value["json_schema"]["schema"]
                     schema_name = value["json_schema"]["name"]
+                    description = value["json_schema"].get("description")
+
+                if "type" in value and value["type"] == "text":
+                    continue
+
                 """
                 Follow similar approach to anthropic - translate to a single tool call. 
 
@@ -160,31 +286,28 @@ class AmazonConverseConfig:
                 - You should set tool_choice (see Forcing tool use) to instruct the model to explicitly use that tool
                 - Remember that the model will pass the input to the tool, so the name of the tool and description should be from the model’s perspective.
                 """
-                if json_schema is not None:
-                    _tool_choice = self.map_tool_choice_values(
-                        model=model, tool_choice="required", drop_params=drop_params  # type: ignore
+                _tool = self._create_json_tool_call_for_response_format(
+                    json_schema=json_schema,
+                    schema_name=schema_name if schema_name != "" else "json_tool_call",
+                    description=description,
+                )
+                optional_params = self._add_tools_to_optional_params(
+                    optional_params=optional_params, tools=[_tool]
+                )
+                if (
+                    litellm.utils.supports_tool_choice(
+                        model=model, custom_llm_provider=self.custom_llm_provider
                     )
-
-                    _tool = ChatCompletionToolParam(
-                        type="function",
-                        function=ChatCompletionToolParamFunctionChunk(
-                            name=schema_name, parameters=json_schema
-                        ),
-                    )
-
-                    optional_params["tools"] = [_tool]
-                    optional_params["tool_choice"] = _tool_choice
-                    optional_params["json_mode"] = True
-                else:
-                    if litellm.drop_params is True or drop_params is True:
-                        pass
-                    else:
-                        raise litellm.utils.UnsupportedParamsError(
-                            message="Bedrock doesn't support response_format={}. To drop it from the call, set `litellm.drop_params = True.".format(
-                                value
-                            ),
-                            status_code=400,
+                    and not is_thinking_enabled
+                ):
+                    optional_params["tool_choice"] = ToolChoiceValuesBlock(
+                        tool=SpecificToolChoiceBlock(
+                            name=schema_name if schema_name != "" else "json_tool_call"
                         )
+                    )
+                optional_params["json_mode"] = True
+                if non_default_params.get("stream", False) is True:
+                    optional_params["fake_stream"] = True
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = value
             if param == "stream":
@@ -199,21 +322,140 @@ class AmazonConverseConfig:
                 optional_params["temperature"] = value
             if param == "top_p":
                 optional_params["topP"] = value
-            if param == "tools":
-                optional_params["tools"] = value
+            if param == "tools" and isinstance(value, list):
+                self._apply_tool_call_transformation(
+                    tools=cast(List[OpenAIChatCompletionToolParam], value),
+                    model=model,
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                )
             if param == "tool_choice":
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model, tool_choice=value, drop_params=drop_params  # type: ignore
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
+            if param == "thinking":
+                optional_params["thinking"] = value
+            elif param == "reasoning_effort" and isinstance(value, str):
+                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                    value
+                )
 
+        self.update_optional_params_with_thinking_tokens(
+            non_default_params=non_default_params, optional_params=optional_params
+        )
+
+        return optional_params
+
+    @overload
+    def _get_cache_point_block(
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system"],
+    ) -> Optional[SystemContentBlock]:
+        pass
+
+    @overload
+    def _get_cache_point_block(
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["content_block"],
+    ) -> Optional[ContentBlock]:
+        pass
+
+    def _get_cache_point_block(
+        self,
+        message_block: Union[
+            OpenAIMessageContentListBlock,
+            ChatCompletionUserMessage,
+            ChatCompletionSystemMessage,
+        ],
+        block_type: Literal["system", "content_block"],
+    ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
+        if message_block.get("cache_control", None) is None:
+            return None
+        if block_type == "system":
+            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+        else:
+            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+
+    def _transform_system_message(
+        self, messages: List[AllMessageValues]
+    ) -> Tuple[List[AllMessageValues], List[SystemContentBlock]]:
+        system_prompt_indices = []
+        system_content_blocks: List[SystemContentBlock] = []
+        for idx, message in enumerate(messages):
+            if message["role"] == "system":
+                system_prompt_indices.append(idx)
+                if isinstance(message["content"], str) and message["content"]:
+                    system_content_blocks.append(
+                        SystemContentBlock(text=message["content"])
+                    )
+                    cache_block = self._get_cache_point_block(
+                        message, block_type="system"
+                    )
+                    if cache_block:
+                        system_content_blocks.append(cache_block)
+                elif isinstance(message["content"], list):
+                    for m in message["content"]:
+                        if m.get("type") == "text" and m.get("text"):
+                            system_content_blocks.append(
+                                SystemContentBlock(text=m["text"])
+                            )
+                            cache_block = self._get_cache_point_block(
+                                m, block_type="system"
+                            )
+                            if cache_block:
+                                system_content_blocks.append(cache_block)
+        if len(system_prompt_indices) > 0:
+            for idx in reversed(system_prompt_indices):
+                messages.pop(idx)
+        return messages, system_content_blocks
+
+    def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
+        if "top_k" in inference_params:
+            inference_params["topK"] = inference_params.pop("top_k")
+        return InferenceConfig(**inference_params)
+
+    def _handle_top_k_value(self, model: str, inference_params: dict) -> dict:
+        base_model = BedrockModelInfo.get_base_model(model)
+
+        val_top_k = None
+        if "topK" in inference_params:
+            val_top_k = inference_params.pop("topK")
+        elif "top_k" in inference_params:
+            val_top_k = inference_params.pop("top_k")
+
+        if val_top_k:
+            if base_model.startswith("anthropic"):
+                return {"top_k": val_top_k}
+            if base_model.startswith("amazon.nova"):
+                return {"inferenceConfig": {"topK": val_top_k}}
+
+        return {}
+
+    def _transform_request_helper(
+        self,
+        model: str,
+        system_content_blocks: List[SystemContentBlock],
+        optional_params: dict,
+        messages: Optional[List[AllMessageValues]] = None,
+    ) -> CommonRequestObject:
         ## VALIDATE REQUEST
         """
         Bedrock doesn't support tool calling without `tools=` param specified.
         """
         if (
-            "tools" not in non_default_params
+            "tools" not in optional_params
             and messages is not None
             and has_tool_call_blocks(messages)
         ):
@@ -227,60 +469,32 @@ class AmazonConverseConfig:
                     model="",
                     llm_provider="bedrock",
                 )
-        return optional_params
-
-    def _transform_request(
-        self,
-        model: str,
-        messages: List[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> RequestObject:
-        system_prompt_indices = []
-        system_content_blocks: List[SystemContentBlock] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: Optional[SystemContentBlock] = None
-                if isinstance(message["content"], str) and len(message["content"]) > 0:
-                    _system_content_block = SystemContentBlock(text=message["content"])
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type", "") == "text" and len(m["text"]) > 0:
-                            _system_content_block = SystemContentBlock(text=m["text"])
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
 
         inference_params = copy.deepcopy(optional_params)
-        additional_request_keys = []
-        additional_request_params = {}
-        supported_converse_params = AmazonConverseConfig.__annotations__.keys()
+        supported_converse_params = list(
+            AmazonConverseConfig.__annotations__.keys()
+        ) + ["top_k"]
         supported_tool_call_params = ["tools", "tool_choice"]
-        supported_guardrail_params = ["guardrailConfig"]
-        inference_params.pop("json_mode", None)  # used for handling json_schema
-        ## TRANSFORMATION ##
-
-        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        supported_config_params = list(self.get_config_blocks().keys())
+        total_supported_params = (
+            supported_converse_params
+            + supported_tool_call_params
+            + supported_config_params
         )
+        inference_params.pop("json_mode", None)  # used for handling json_schema
 
-        # send all model-specific params in 'additional_request_params'
-        for k, v in inference_params.items():
-            if (
-                k not in supported_converse_params
-                and k not in supported_tool_call_params
-                and k not in supported_guardrail_params
-            ):
-                additional_request_params[k] = v
-                additional_request_keys.append(k)
-        for key in additional_request_keys:
-            inference_params.pop(key, None)
+        # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
+        additional_request_params = {
+            k: v for k, v in inference_params.items() if k not in total_supported_params
+        }
+        inference_params = {
+            k: v for k, v in inference_params.items() if k in total_supported_params
+        }
+
+        # Only set the topK value in for models that support it
+        additional_request_params.update(
+            self._handle_top_k_value(model, inference_params)
+        )
 
         bedrock_tools: List[ToolBlock] = _bedrock_tools_pt(
             inference_params.pop("tools", [])
@@ -296,25 +510,321 @@ class AmazonConverseConfig:
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
-        _data: RequestObject = {
-            "messages": bedrock_messages,
+        data: CommonRequestObject = {
             "additionalModelRequestFields": additional_request_params,
             "system": system_content_blocks,
-            "inferenceConfig": InferenceConfig(**inference_params),
+            "inferenceConfig": self._transform_inference_params(
+                inference_params=inference_params
+            ),
         }
 
-        # Guardrail Config
-        guardrail_config: Optional[GuardrailConfigBlock] = None
-        request_guardrails_config = inference_params.pop("guardrailConfig", None)
-        if request_guardrails_config is not None:
-            guardrail_config = GuardrailConfigBlock(**request_guardrails_config)
-            _data["guardrailConfig"] = guardrail_config
+        # Handle all config blocks
+        for config_name, config_class in self.get_config_blocks().items():
+            config_value = inference_params.pop(config_name, None)
+            if config_value is not None:
+                data[config_name] = config_class(**config_value)  # type: ignore
 
         # Tool Config
         if bedrock_tool_config is not None:
-            _data["toolConfig"] = bedrock_tool_config
+            data["toolConfig"] = bedrock_tool_config
 
-        return _data
+        return data
+
+    async def _async_transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> RequestObject:
+        messages, system_content_blocks = self._transform_system_message(messages)
+        ## TRANSFORMATION ##
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=messages,
+        )
+
+        bedrock_messages = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages,
+                model=model,
+                llm_provider="bedrock_converse",
+                user_continue_message=litellm_params.pop("user_continue_message", None),
+            )
+        )
+
+        data: RequestObject = {"messages": bedrock_messages, **_data}
+
+        return data
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return cast(
+            dict,
+            self._transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+            ),
+        )
+
+    def _transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> RequestObject:
+        messages, system_content_blocks = self._transform_system_message(messages)
+
+        _data: CommonRequestObject = self._transform_request_helper(
+            model=model,
+            system_content_blocks=system_content_blocks,
+            optional_params=optional_params,
+            messages=messages,
+        )
+
+        ## TRANSFORMATION ##
+        bedrock_messages: List[MessageBlock] = _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock_converse",
+            user_continue_message=litellm_params.pop("user_continue_message", None),
+        )
+
+        data: RequestObject = {"messages": bedrock_messages, **_data}
+
+        return data
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: Logging,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ModelResponse:
+        return self._transform_response(
+            model=model,
+            response=raw_response,
+            model_response=model_response,
+            stream=optional_params.get("stream", False),
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            api_key=api_key,
+            data=request_data,
+            messages=messages,
+            encoding=encoding,
+        )
+
+    def _transform_reasoning_content(
+        self, reasoning_content_blocks: List[BedrockConverseReasoningContentBlock]
+    ) -> str:
+        """
+        Extract the reasoning text from the reasoning content blocks
+
+        Ensures deepseek reasoning content compatible output.
+        """
+        reasoning_content_str = ""
+        for block in reasoning_content_blocks:
+            if "reasoningText" in block:
+                reasoning_content_str += block["reasoningText"]["text"]
+        return reasoning_content_str
+
+    def _transform_thinking_blocks(
+        self, thinking_blocks: List[BedrockConverseReasoningContentBlock]
+    ) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+        """Return a consistent format for thinking blocks between Anthropic and Bedrock."""
+        thinking_blocks_list: List[
+            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
+        ] = []
+        for block in thinking_blocks:
+            if "reasoningText" in block:
+                _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+                _text = block["reasoningText"].get("text")
+                _signature = block["reasoningText"].get("signature")
+                if _text is not None:
+                    _thinking_block["thinking"] = _text
+                if _signature is not None:
+                    _thinking_block["signature"] = _signature
+                thinking_blocks_list.append(_thinking_block)
+            elif "redactedContent" in block:
+                _redacted_block = ChatCompletionRedactedThinkingBlock(
+                    type="redacted_thinking", data=block["redactedContent"]
+                )
+                thinking_blocks_list.append(_redacted_block)
+        return thinking_blocks_list
+
+    def _transform_usage(self, usage: ConverseTokenUsageBlock) -> Usage:
+        input_tokens = usage["inputTokens"]
+        output_tokens = usage["outputTokens"]
+        total_tokens = usage["totalTokens"]
+        cache_creation_input_tokens: int = 0
+        cache_read_input_tokens: int = 0
+
+        if "cacheReadInputTokens" in usage:
+            cache_read_input_tokens = usage["cacheReadInputTokens"]
+            input_tokens += cache_read_input_tokens
+        if "cacheWriteInputTokens" in usage:
+            """
+            Do not increment prompt_tokens with cacheWriteInputTokens
+            """
+            cache_creation_input_tokens = usage["cacheWriteInputTokens"]
+
+        prompt_tokens_details = PromptTokensDetailsWrapper(
+            cached_tokens=cache_read_input_tokens
+        )
+        openai_usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=total_tokens,
+            prompt_tokens_details=prompt_tokens_details,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+        )
+        return openai_usage
+
+    def get_tool_call_names(
+        self,
+        tools: Optional[
+            Union[List[ToolBlock], List[OpenAIChatCompletionToolParam]]
+        ] = None,
+    ) -> List[str]:
+        if tools is None:
+            return []
+        tool_set: set[str] = set()
+        for tool in tools:
+            tool_spec = tool.get("toolSpec")
+            function = tool.get("function")
+            if tool_spec is not None:
+                _name = cast(dict, tool_spec).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
+            if function is not None:
+                _name = cast(dict, function).get("name")
+                if _name is not None and isinstance(_name, str):
+                    tool_set.add(_name)
+        return list(tool_set)
+
+    def apply_tool_call_transformation_if_needed(
+        self,
+        message: Message,
+        tools: Optional[List[ToolBlock]] = None,
+        initial_finish_reason: Optional[str] = None,
+    ) -> Tuple[Message, Optional[str]]:
+        """
+        Apply tool call transformation to a message.
+
+        LLM providers (e.g. Bedrock, Vertex AI) sometimes return tool call in the response content.
+
+        If the response content is a JSON object, we can parse it and return the tool call in the tool_calls field.
+        """
+        returned_finish_reason = initial_finish_reason
+        if tools is None:
+            return message, returned_finish_reason
+
+        if message.content is not None:
+            try:
+                tool_call_names = self.get_tool_call_names(tools)
+                json_content = json.loads(message.content)
+                if (
+                    json_content.get("type") == "function"
+                    and json_content.get("name") in tool_call_names
+                ):
+                    tool_calls = [
+                        ChatCompletionMessageToolCall(function=Function(**json_content))
+                    ]
+
+                    message.tool_calls = tool_calls
+                    message.content = None
+                    returned_finish_reason = "tool_calls"
+            except Exception:
+                pass
+
+        return message, returned_finish_reason
+
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
+        str,
+        List[ChatCompletionToolCallChunk],
+        Optional[List[BedrockConverseReasoningContentBlock]],
+    ]:
+        """
+        Translate the message content to a string and a list of tool calls and reasoning content blocks
+
+        Returns:
+            content_str: str
+            tools: List[ChatCompletionToolCallChunk]
+            reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]]
+        """
+        content_str = ""
+        tools: List[ChatCompletionToolCallChunk] = []
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
+        for idx, content in enumerate(content_blocks):
+            """
+            - Content is either a tool response or text
+            """
+            extracted_reasoning_content_str: Optional[str] = None
+            if "text" in content:
+                (
+                    extracted_reasoning_content_str,
+                    _content_str,
+                ) = _parse_content_for_reasoning(content["text"])
+                if _content_str is not None:
+                    content_str += _content_str
+            if "toolUse" in content:
+                ## check tool name was formatted by litellm
+                _response_tool_name = content["toolUse"]["name"]
+                response_tool_name = get_bedrock_tool_name(
+                    response_tool_name=_response_tool_name
+                )
+                _function_chunk = ChatCompletionToolCallFunctionChunk(
+                    name=response_tool_name,
+                    arguments=json.dumps(content["toolUse"]["input"]),
+                )
+
+                _tool_response_chunk = ChatCompletionToolCallChunk(
+                    id=content["toolUse"]["toolUseId"],
+                    type="function",
+                    function=_function_chunk,
+                    index=idx,
+                )
+                tools.append(_tool_response_chunk)
+            if extracted_reasoning_content_str is not None:
+                if reasoningContentBlocks is None:
+                    reasoningContentBlocks = []
+                reasoningContentBlocks.append(
+                    BedrockConverseReasoningContentBlock(
+                        reasoningText=BedrockConverseReasoningTextBlock(
+                            text=extracted_reasoning_content_str,
+                        )
+                    )
+                )
+            if "reasoningContent" in content:
+                if reasoningContentBlocks is None:
+                    reasoningContentBlocks = []
+                reasoningContentBlocks.append(content["reasoningContent"])
+
+        return content_str, tools, reasoningContentBlocks
 
     def _transform_response(
         self,
@@ -324,13 +834,11 @@ class AmazonConverseConfig:
         stream: bool,
         logging_obj: Optional[Logging],
         optional_params: dict,
-        api_key: str,
+        api_key: Optional[str],
         data: Union[dict, str],
         messages: List,
-        print_verbose,
         encoding,
-    ) -> Union[ModelResponse, CustomStreamWrapper]:
-
+    ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
             logging_obj.post_call(
@@ -339,7 +847,7 @@ class AmazonConverseConfig:
                 original_response=response.text,
                 additional_args={"complete_input_dict": data},
             )
-        print_verbose(f"raw model_response: {response.text}")
+
         json_mode: Optional[bool] = optional_params.pop("json_mode", None)
         ## RESPONSE OBJECT
         try:
@@ -391,34 +899,28 @@ class AmazonConverseConfig:
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
+
         if message is not None:
-            for idx, content in enumerate(message["content"]):
-                """
-                - Content is either a tool response or text
-                """
-                if "text" in content:
-                    content_str += content["text"]
-                if "toolUse" in content:
+            (
+                content_str,
+                tools,
+                reasoningContentBlocks,
+            ) = self._translate_message_content(message["content"])
 
-                    ## check tool name was formatted by litellm
-                    _response_tool_name = content["toolUse"]["name"]
-                    response_tool_name = get_bedrock_tool_name(
-                        response_tool_name=_response_tool_name
-                    )
-                    _function_chunk = ChatCompletionToolCallFunctionChunk(
-                        name=response_tool_name,
-                        arguments=json.dumps(content["toolUse"]["input"]),
-                    )
-
-                    _tool_response_chunk = ChatCompletionToolCallChunk(
-                        id=content["toolUse"]["toolUseId"],
-                        type="function",
-                        function=_function_chunk,
-                        index=idx,
-                    )
-                    tools.append(_tool_response_chunk)
+        if reasoningContentBlocks is not None:
+            chat_completion_message["provider_specific_fields"] = {
+                "reasoningContentBlocks": reasoningContentBlocks,
+            }
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
-
         if json_mode is True and tools is not None and len(tools) == 1:
             # to support 'json_schema' logic on bedrock models
             json_mode_content_str: Optional[str] = tools[0]["function"].get("arguments")
@@ -428,24 +930,30 @@ class AmazonConverseConfig:
             chat_completion_message["tool_calls"] = tools
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        input_tokens = completion_response["usage"]["inputTokens"]
-        output_tokens = completion_response["usage"]["outputTokens"]
-        total_tokens = completion_response["usage"]["totalTokens"]
+        usage = self._transform_usage(completion_response["usage"])
 
+        ## HANDLE TOOL CALLS
+        _message = Message(**chat_completion_message)
+        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+
+        (
+            returned_message,
+            returned_finish_reason,
+        ) = self.apply_tool_call_transformation_if_needed(
+            message=_message,
+            tools=optional_params.get("tools"),
+            initial_finish_reason=initial_finish_reason,
+        )
         model_response.choices = [
             litellm.Choices(
-                finish_reason=map_finish_reason(completion_response["stopReason"]),
+                finish_reason=returned_finish_reason,
                 index=0,
-                message=litellm.Message(**chat_completion_message),
+                message=returned_message,
             )
         ]
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
-            prompt_tokens=input_tokens,
-            completion_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
+
         setattr(model_response, "usage", usage)
 
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it
@@ -454,21 +962,25 @@ class AmazonConverseConfig:
 
         return model_response
 
-    def _supported_cross_region_inference_region(self) -> List[str]:
-        """
-        Abbreviations of regions AWS Bedrock supports for cross region inference
-        """
-        return ["us", "eu"]
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BaseLLMException:
+        return BedrockError(
+            message=error_message,
+            status_code=status_code,
+            headers=headers,
+        )
 
-    def _get_base_model(self, model: str) -> str:
-        """
-        Get the base model from the given model name.
-
-        Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
-        AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
-        """
-
-        potential_region = model.split(".", 1)[0]
-        if potential_region in self._supported_cross_region_inference_region():
-            return model.split(".", 1)[1]
-        return model
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict:
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers

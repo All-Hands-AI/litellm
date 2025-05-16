@@ -15,7 +15,6 @@ from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_EndUserTable
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
-import json, traceback
 
 
 class _ENTERPRISE_BlockedUserList(CustomLogger):
@@ -69,7 +68,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                 - check if end-user in cache
                 - check if end-user in db
             """
-            self.print_verbose(f"Inside Blocked User List Pre-Call Hook")
+            self.print_verbose("Inside Blocked User List Pre-Call Hook")
             if "user_id" in data or "user" in data:
                 user = data.get("user_id", data.get("user", ""))
                 if (
@@ -97,7 +96,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                     if end_user_obj is None:  # user not in db - assume not blocked
                         end_user_obj = LiteLLM_EndUserTable(user_id=user, blocked=False)
                     cache.set_cache(key=cache_key, value=end_user_obj, ttl=60)
-                    if end_user_obj is not None and end_user_obj.blocked == True:
+                    if end_user_obj is not None and end_user_obj.blocked is True:
                         raise HTTPException(
                             status_code=400,
                             detail={
@@ -106,7 +105,7 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                         )
                 elif (
                     end_user_cache_obj is not None
-                    and end_user_cache_obj.blocked == True
+                    and end_user_cache_obj.blocked is True
                 ):
                     raise HTTPException(
                         status_code=400,

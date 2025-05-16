@@ -11,9 +11,7 @@ FROM $LITELLM_BUILD_IMAGE AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apk update && \
-    apk add --no-cache gcc python3-dev musl-dev && \
-    rm -rf /var/cache/apk/*
+RUN apk add --no-cache gcc python3-dev musl-dev
 
 RUN pip install --upgrade pip && \
     pip install build
@@ -37,7 +35,7 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
 
 # Update dependencies and clean up
-RUN apk update && apk upgrade && rm -rf /var/cache/apk/*
+RUN apk upgrade --no-cache
 
 WORKDIR /app
 
@@ -48,8 +46,11 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+RUN chmod +x docker/entrypoint.sh
+RUN chmod +x docker/prod_entrypoint.sh
+
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command
-ENTRYPOINT ["litellm"]
+ENTRYPOINT ["docker/prod_entrypoint.sh"]
 CMD ["--port", "4000"]

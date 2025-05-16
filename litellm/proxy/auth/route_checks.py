@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import HTTPException, Request, status
 
@@ -11,13 +11,41 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import hash_token
 
 from .auth_checks_organization import _user_is_org_admin
-from .auth_utils import _has_user_setup_sso
 
 
 class RouteChecks:
+    @staticmethod
+    def is_virtual_key_allowed_to_call_route(
+        route: str, valid_token: UserAPIKeyAuth
+    ) -> bool:
+        """
+        Raises Exception if Virtual Key is not allowed to call the route
+        """
+
+        # Only check if valid_token.allowed_routes is set and is a list with at least one item
+        if valid_token.allowed_routes is None:
+            return True
+        if not isinstance(valid_token.allowed_routes, list):
+            return True
+        if len(valid_token.allowed_routes) == 0:
+            return True
+
+        # explicit check for allowed routes
+        if route in valid_token.allowed_routes:
+            return True
+
+        # check if wildcard pattern is allowed
+        for allowed_route in valid_token.allowed_routes:
+            if RouteChecks._route_matches_wildcard_pattern(
+                route=route, pattern=allowed_route
+            ):
+                return True
+
+        raise Exception(
+            f"Virtual key is not allowed to call this route. Only allowed to call routes: {valid_token.allowed_routes}. Tried to call route: {route}"
+        )
 
     @staticmethod
     def non_proxy_admin_allowed_routes_check(
@@ -26,7 +54,6 @@ class RouteChecks:
         route: str,
         request: Request,
         valid_token: UserAPIKeyAuth,
-        api_key: str,
         request_data: dict,
     ):
         """
@@ -44,14 +71,8 @@ class RouteChecks:
             route in LiteLLMRoutes.info_routes.value
         ):  # check if user allowed to call an info route
             if route == "/key/info":
-                # check if user can access this route
-                query_params = request.query_params
-                key = query_params.get("key")
-                if key is not None and hash_token(token=key) != api_key:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="user not allowed to access this key's info",
-                    )
+                # handled by function itself
+                pass
             elif route == "/user/info":
                 # check if user can access this route
                 query_params = request.query_params
@@ -71,14 +92,11 @@ class RouteChecks:
                 pass
             elif route == "/team/info":
                 pass  # handled by function itself
-        elif _has_user_setup_sso() and route in LiteLLMRoutes.sso_only_routes.value:
-            pass
         elif (
             route in LiteLLMRoutes.global_spend_tracking_routes.value
             and getattr(valid_token, "permissions", None) is not None
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
-
             pass
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             if RouteChecks.is_llm_api_route(route=route):
@@ -86,10 +104,11 @@ class RouteChecks:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
                 )
-            if route in LiteLLMRoutes.management_routes.value:
+            if RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.management_routes.value
+            ):
                 # the Admin Viewer is only allowed to call /user/update for their own user_id and can only update
                 if route == "/user/update":
-
                     # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
                     if request_data is not None and isinstance(request_data, dict):
                         _params_updated = request_data.keys()
@@ -107,21 +126,27 @@ class RouteChecks:
 
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and route in LiteLLMRoutes.internal_user_routes.value
+            and RouteChecks.check_route_access(
+                route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value
+            )
         ):
             pass
-        elif (
-            _user_is_org_admin(request_data=request_data, user_object=user_obj)
-            and route in LiteLLMRoutes.org_admin_allowed_routes.value
+        elif _user_is_org_admin(
+            request_data=request_data, user_object=user_obj
+        ) and RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value
         ):
             pass
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-            and route in LiteLLMRoutes.internal_user_view_only_routes.value
+            and RouteChecks.check_route_access(
+                route=route,
+                allowed_routes=LiteLLMRoutes.internal_user_view_only_routes.value,
+            )
         ):
             pass
-        elif (
-            route in LiteLLMRoutes.self_managed_routes.value
+        elif RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value
         ):  # routes that manage their own allowed/disallowed logic
             pass
         else:
@@ -179,16 +204,28 @@ class RouteChecks:
                 ):
                     return True
 
-        # Pass through Bedrock, VertexAI, and Cohere Routes
-        if "/bedrock/" in route:
+        if RouteChecks._is_azure_openai_route(route=route):
             return True
-        if "/vertex-ai/" in route:
-            return True
-        if "/gemini/" in route:
-            return True
-        if "/cohere/" in route:
-            return True
-        if "/langfuse/" in route:
+
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if _llm_passthrough_route in route:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_azure_openai_route(route: str) -> bool:
+        """
+        Check if route is a route from AzureOpenAI SDK client
+
+        eg.
+        route='/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions'
+        """
+        # Add support for deployment and engine model paths
+        deployment_pattern = r"^/openai/deployments/[^/]+/[^/]+/chat/completions$"
+        engine_pattern = r"^/engines/[^/]+/chat/completions$"
+
+        if re.match(deployment_pattern, route) or re.match(engine_pattern, route):
             return True
         return False
 
@@ -211,5 +248,66 @@ class RouteChecks:
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
         if re.match(pattern, route):
+            return True
+        return False
+
+    @staticmethod
+    def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
+        """
+        Check if route matches the wildcard pattern
+
+        eg.
+
+        pattern: "/scim/v2/*"
+        route: "/scim/v2/Users"
+        - returns: True
+
+        pattern: "/scim/v2/*"
+        route: "/chat/completions"
+        - returns: False
+
+
+        pattern: "/scim/v2/*"
+        route: "/scim/v2/Users/123"
+        - returns: True
+
+        """
+        if pattern.endswith("*"):
+            # Get the prefix (everything before the wildcard)
+            prefix = pattern[:-1]
+            return route.startswith(prefix)
+        else:
+            # If there's no wildcard, the pattern and route should match exactly
+            return route == pattern
+
+    @staticmethod
+    def check_route_access(route: str, allowed_routes: List[str]) -> bool:
+        """
+        Check if a route has access by checking both exact matches and patterns
+
+        Args:
+            route (str): The route to check
+            allowed_routes (list): List of allowed routes/patterns
+
+        Returns:
+            bool: True if route is allowed, False otherwise
+        """
+        return route in allowed_routes or any(  # Check exact match
+            RouteChecks._route_matches_pattern(route=route, pattern=allowed_route)
+            for allowed_route in allowed_routes
+        )  # Check pattern match
+
+    @staticmethod
+    def _is_assistants_api_request(request: Request) -> bool:
+        """
+        Returns True if `thread` or `assistant` is in the request path
+
+        Args:
+            request (Request): The request object
+
+        Returns:
+            bool: True if `thread` or `assistant` is in the request path, False otherwise
+        """
+        if "thread" in request.url.path or "assistant" in request.url.path:
             return True
         return False

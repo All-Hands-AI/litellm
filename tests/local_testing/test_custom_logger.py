@@ -122,8 +122,13 @@ async def test_async_chat_openai_stream():
 
         complete_streaming_response = complete_streaming_response.strip("'")
 
+        print(f"complete_streaming_response: {complete_streaming_response}")
+
         await asyncio.sleep(3)
 
+        print(
+            f"tmp_function.complete_streaming_response_in_callback: {tmp_function.complete_streaming_response_in_callback}"
+        )
         # problematic line
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0][
             "message"
@@ -155,7 +160,7 @@ def test_completion_azure_stream_moderation_failure():
         ]
         try:
             response = completion(
-                model="azure/chatgpt-v-2",
+                model="azure/chatgpt-v-3",
                 messages=messages,
                 mock_response="Exception: content_filter_policy",
                 stream=True,
@@ -190,7 +195,7 @@ def test_async_custom_handler_stream():
         async def test_1():
             nonlocal complete_streaming_response
             response = await litellm.acompletion(
-                model="azure/chatgpt-v-2", messages=messages, stream=True
+                model="azure/chatgpt-v-3", messages=messages, stream=True
             )
             async for chunk in response:
                 complete_streaming_response += (
@@ -234,7 +239,7 @@ def test_azure_completion_stream():
         complete_streaming_response = ""
 
         response = litellm.completion(
-            model="azure/chatgpt-v-2", messages=messages, stream=True
+            model="azure/chatgpt-v-3", messages=messages, stream=True
         )
         for chunk in response:
             complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
@@ -256,6 +261,7 @@ def test_azure_completion_stream():
 @pytest.mark.asyncio
 async def test_async_custom_handler_completion():
     try:
+        litellm._turn_on_debug
         customHandler_success = MyCustomHandler()
         customHandler_failure = MyCustomHandler()
         # success
@@ -279,6 +285,7 @@ async def test_async_custom_handler_completion():
             == "gpt-3.5-turbo"
         )
         # failure
+        litellm.logging_callback_manager._reset_all_callbacks()
         litellm.callbacks = [customHandler_failure]
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},

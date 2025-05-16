@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.llms.prompt_templates.factory import map_system_message_pt
+from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.types.completion import (
     ChatCompletionMessageParam,
     ChatCompletionSystemMessageParam,
@@ -65,6 +65,30 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
         model="claude-3", custom_llm_provider="anthropic", stop=stop_sequence
     )
     assert len(optional_params) == expected_count
+
+
+
+
+def test_get_optional_params_with_allowed_openai_params():
+    """
+    Test if use can dynamically pass in allowed_openai_params to override default behavior
+    """
+    litellm.drop_params = True
+    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    response_format = {"type": "json"}
+    reasoning_effort = "low"
+    optional_params = get_optional_params(
+        model="cf/llama-3.1-70b-instruct", 
+        custom_llm_provider="cloudflare", 
+        allowed_openai_params=["tools", "reasoning_effort", "response_format"],
+        tools=tools,
+        response_format=response_format,
+        reasoning_effort=reasoning_effort,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tools"] == tools
+    assert optional_params["response_format"] == response_format
+    assert optional_params["reasoning_effort"] == reasoning_effort  
 
 
 def test_bedrock_optional_params_embeddings():
@@ -122,6 +146,26 @@ def test_bedrock_optional_params_completions(model):
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/amazon.titan-large",
+        "bedrock/meta.llama3-2-11b-instruct-v1:0",
+        "bedrock/ai21.j2-ultra-v1",
+        "bedrock/cohere.command-nightly",
+        "bedrock/mistral.mistral-7b",
+    ],
+)
+def test_bedrock_optional_params_simple(model):
+    litellm.drop_params = True
+    get_optional_params(
+        model=model,
+        max_tokens=10,
+        temperature=0.1,
+        custom_llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize(
     "model, expected_dimensions, dimensions_kwarg",
     [
         ("bedrock/amazon.titan-embed-text-v1", False, None),
@@ -173,7 +217,7 @@ def test_openai_optional_params_embeddings():
 def test_azure_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         encoding_format=None,
         custom_llm_provider="azure",
@@ -190,23 +234,11 @@ def test_databricks_optional_params():
         custom_llm_provider="databricks",
         max_tokens=10,
         temperature=0.2,
+        stream=True,
     )
     print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 2
+    assert len(optional_params) == 3
     assert "user" not in optional_params
-
-
-def test_gemini_optional_params():
-    litellm.drop_params = True
-    optional_params = get_optional_params(
-        model="",
-        custom_llm_provider="gemini",
-        max_tokens=10,
-        frequency_penalty=10,
-    )
-    print(f"optional_params: {optional_params}")
-    assert len(optional_params) == 1
-    assert "frequency_penalty" not in optional_params
 
 
 def test_azure_ai_mistral_optional_params():
@@ -364,7 +396,7 @@ def test_azure_tool_choice(api_version):
     """
     litellm.drop_params = True
     optional_params = litellm.utils.get_optional_params(
-        model="chatgpt-v-2",
+        model="chatgpt-v-3",
         user="John",
         custom_llm_provider="azure",
         max_tokens=10,
@@ -411,7 +443,9 @@ def test_dynamic_drop_params(drop_params):
 
 
 def test_dynamic_drop_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -457,7 +491,9 @@ def test_dynamic_drop_params_parallel_tool_calls():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -497,8 +533,24 @@ def test_dynamic_drop_additional_params(drop_params):
             pass
 
 
+def test_dynamic_drop_additional_params_stream_options():
+    """
+    Make a call to vertex ai, dropping 'stream_options' specifically
+    """
+    optional_params = litellm.utils.get_optional_params(
+        model="mistral-large-2411@001",
+        custom_llm_provider="vertex_ai",
+        stream_options={"include_usage": True},
+        additional_drop_params=["stream_options"],
+    )
+
+    assert "stream_options" not in optional_params
+
+
 def test_dynamic_drop_additional_params_e2e():
-    with patch("requests.post", new=MagicMock()) as mock_response:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
+    ) as mock_response:
         try:
             response = litellm.completion(
                 model="command-r",
@@ -545,7 +597,7 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock()) as mock_client:
+    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -786,19 +838,624 @@ def test_unmapped_vertex_anthropic_model():
     assert "max_retries" not in optional_params
 
 
-@pytest.mark.parametrize(
-    "tools, key",
-    [
-        ([{"googleSearchRetrieval": {}}], "googleSearchRetrieval"),
-        ([{"code_execution": {}}], "code_execution"),
-    ],
-)
-def test_vertex_tool_params(tools, key):
+@pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+def test_anthropic_parallel_tool_calls(provider):
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider=provider,
+        parallel_tool_calls=True,
+    )
+    print(f"optional_params: {optional_params}")
+    assert optional_params["tool_choice"]["disable_parallel_tool_use"] is False
+
+
+def test_anthropic_computer_tool_use():
+    tools = [
+        {
+            "type": "computer_20241022",
+            "function": {
+                "name": "computer",
+                "parameters": {
+                    "display_height_px": 100,
+                    "display_width_px": 100,
+                    "display_number": 1,
+                },
+            },
+        }
+    ]
 
     optional_params = get_optional_params(
-        model="gemini-1.5-pro",
+        model="claude-3-5-sonnet-v250@20241022",
+        custom_llm_provider="anthropic",
+        tools=tools,
+    )
+    assert optional_params["tools"][0]["type"] == "computer_20241022"
+    assert optional_params["tools"][0]["display_height_px"] == 100
+    assert optional_params["tools"][0]["display_width_px"] == 100
+    assert optional_params["tools"][0]["display_number"] == 1
+
+
+def test_vertex_schema_field():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "json",
+                "description": "Respond with a JSON object.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thinking": {
+                            "type": "string",
+                            "description": "Your internal thoughts on different problem details given the guidance.",
+                        },
+                        "problems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "icon": {
+                                        "type": "string",
+                                        "enum": [
+                                            "BarChart2",
+                                            "Bell",
+                                        ],
+                                        "description": "The name of a Lucide icon to display",
+                                    },
+                                    "color": {
+                                        "type": "string",
+                                        "description": "A Tailwind color class for the icon, e.g., 'text-red-500'",
+                                    },
+                                    "problem": {
+                                        "type": "string",
+                                        "description": "The title of the problem being addressed, approximately 3-5 words.",
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": "A brief explanation of the problem, approximately 20 words.",
+                                    },
+                                    "impacts": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential impacts or consequences of the problem, approximately 3 words each.",
+                                    },
+                                    "automations": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "A list of potential automations to address the problem, approximately 3-5 words each.",
+                                    },
+                                },
+                                "required": [
+                                    "icon",
+                                    "color",
+                                    "problem",
+                                    "description",
+                                    "impacts",
+                                    "automations",
+                                ],
+                                "additionalProperties": False,
+                            },
+                            "description": "Please generate problem cards that match this guidance.",
+                        },
+                    },
+                    "required": ["thinking", "problems"],
+                    "additionalProperties": False,
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                },
+            },
+        }
+    ]
+
+    optional_params = get_optional_params(
+        model="gemini-1.5-flash",
         custom_llm_provider="vertex_ai",
         tools=tools,
     )
     print(optional_params)
-    assert optional_params["tools"][0][key] == {}
+    print(optional_params["tools"][0]["function_declarations"][0])
+    assert (
+        "$schema"
+        not in optional_params["tools"][0]["function_declarations"][0]["parameters"]
+    )
+
+
+def test_watsonx_tool_choice():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
+    )
+    print(optional_params)
+    assert optional_params["tool_choice_options"] == "auto"
+
+
+def test_watsonx_text_top_k():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro", custom_llm_provider="watsonx_text", top_k=10
+    )
+    print(optional_params)
+    assert optional_params["top_k"] == 10
+
+
+def test_together_ai_model_params():
+    optional_params = get_optional_params(
+        model="together_ai", custom_llm_provider="together_ai", logprobs=1
+    )
+    print(optional_params)
+    assert optional_params["logprobs"] == 1
+
+
+def test_forward_user_param():
+    from litellm.utils import get_supported_openai_params, get_optional_params
+
+    model = "claude-3-5-sonnet-20240620"
+    optional_params = get_optional_params(
+        model=model,
+        user="test_user",
+        custom_llm_provider="anthropic",
+    )
+
+    assert optional_params["metadata"]["user_id"] == "test_user"
+
+
+def test_lm_studio_embedding_params():
+    optional_params = get_optional_params_embeddings(
+        model="lm_studio/gemma2-9b-it",
+        custom_llm_provider="lm_studio",
+        dimensions=1024,
+        drop_params=True,
+    )
+    assert len(optional_params) == 0
+
+
+def test_ollama_pydantic_obj():
+    from pydantic import BaseModel
+
+    class ResponseFormat(BaseModel):
+        x: str
+        y: str
+
+    get_optional_params(
+        model="qwen2:0.5b",
+        custom_llm_provider="ollama",
+        response_format=ResponseFormat,
+    )
+
+
+def test_gemini_frequency_penalty():
+    from litellm.utils import get_supported_openai_params
+
+    optional_params = get_supported_openai_params(
+        model="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        request_type="chat_completion",
+    )
+    assert optional_params is not None
+    assert "frequency_penalty" in optional_params
+
+
+def test_litellm_proxy_claude_3_5_sonnet():
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    tool_choice = "auto"
+
+    optional_params = get_optional_params(
+        model="claude-3-5-sonnet",
+        custom_llm_provider="litellm_proxy",
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    assert optional_params["tools"] == tools
+    assert optional_params["tool_choice"] == tool_choice
+
+
+def test_is_vertex_anthropic_model():
+    assert (
+        litellm.VertexAIAnthropicConfig().is_supported_model(
+            model="claude-3-5-sonnet", custom_llm_provider="litellm_proxy"
+        )
+        is False
+    )
+
+
+def test_groq_response_format_json_schema():
+    optional_params = get_optional_params(
+        model="llama-3.1-70b-versatile",
+        custom_llm_provider="groq",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params is not None
+    assert "response_format" in optional_params
+    assert optional_params["response_format"]["type"] == "json_object"
+
+
+def test_gemini_frequency_penalty():
+    optional_params = get_optional_params(
+        model="gemini-1.5-flash", custom_llm_provider="gemini", frequency_penalty=0.5
+    )
+    assert optional_params["frequency_penalty"] == 0.5
+
+
+def test_azure_prediction_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        prediction={
+            "type": "content",
+            "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+        },
+    )
+    assert optional_params["prediction"] == {
+        "type": "content",
+        "content": "LiteLLM is a very useful way to connect to a variety of LLMs.",
+    }
+
+
+def test_vertex_ai_ft_llama():
+    optional_params = get_optional_params(
+        model="1984786713414729728",
+        custom_llm_provider="vertex_ai",
+        frequency_penalty=0.5,
+        max_retries=10,
+    )
+    assert optional_params["frequency_penalty"] == 0.5
+    assert "max_retries" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model, expected_thinking",
+    [
+        ("claude-3-5-sonnet", False),
+        ("claude-3-7-sonnet", True),
+        ("gpt-3.5-turbo", False),
+    ],
+)
+def test_anthropic_thinking_param(model, expected_thinking):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider="anthropic",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    if expected_thinking:
+        assert "thinking" in optional_params
+    else:
+        assert "thinking" not in optional_params
+
+
+def test_bedrock_invoke_anthropic_max_tokens():
+    passed_params = {
+        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "functions": None,
+        "function_call": None,
+        "temperature": 0.8,
+        "top_p": None,
+        "n": 1,
+        "stream": False,
+        "stream_options": None,
+        "stop": None,
+        "max_tokens": None,
+        "max_completion_tokens": 1024,
+        "modalities": None,
+        "prediction": None,
+        "audio": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "logit_bias": None,
+        "user": None,
+        "custom_llm_provider": "bedrock",
+        "response_format": {"type": "text"},
+        "seed": None,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_plan",
+                    "description": "Generate a plan to execute the task using only the tools outlined in your context.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "steps": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "type": {
+                                            "type": "string",
+                                            "description": "The type of step to execute",
+                                        },
+                                        "tool_name": {
+                                            "type": "string",
+                                            "description": "The name of the tool to use for this step",
+                                        },
+                                        "tool_input": {
+                                            "type": "object",
+                                            "description": "The input to pass to the tool. Make sure this complies with the schema for the tool.",
+                                        },
+                                        "tool_output": {
+                                            "type": "object",
+                                            "description": "(Optional) The output from the tool if needed for future steps. Make sure this complies with the schema for the tool.",
+                                        },
+                                    },
+                                    "required": ["type"],
+                                },
+                            }
+                        },
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_wire_tool",
+                    "description": "Create a wire transfer with complete wire instructions",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "company_id": {
+                                "type": "integer",
+                                "description": "The ID of the company receiving the investment",
+                            },
+                            "investment_id": {
+                                "type": "integer",
+                                "description": "The ID of the investment memo",
+                            },
+                            "dollar_amount": {
+                                "type": "number",
+                                "description": "The amount to wire in USD",
+                            },
+                            "wiring_instructions": {
+                                "type": "object",
+                                "description": "Complete bank account and routing information for the wire",
+                                "properties": {
+                                    "account_name": {
+                                        "type": "string",
+                                        "description": "Name on the bank account",
+                                    },
+                                    "address_1": {
+                                        "type": "string",
+                                        "description": "Primary address line",
+                                    },
+                                    "address_2": {
+                                        "type": "string",
+                                        "description": "Secondary address line (optional)",
+                                    },
+                                    "city": {"type": "string"},
+                                    "state": {"type": "string"},
+                                    "zip": {"type": "string"},
+                                    "country": {"type": "string", "default": "US"},
+                                    "bank_name": {"type": "string"},
+                                    "account_number": {"type": "string"},
+                                    "routing_number": {"type": "string"},
+                                    "account_type": {
+                                        "type": "string",
+                                        "enum": ["checking", "savings"],
+                                        "default": "checking",
+                                    },
+                                    "swift_code": {
+                                        "type": "string",
+                                        "description": "Required for international wires",
+                                    },
+                                    "iban": {
+                                        "type": "string",
+                                        "description": "Required for some international wires",
+                                    },
+                                    "bank_city": {"type": "string"},
+                                    "bank_state": {"type": "string"},
+                                    "bank_country": {"type": "string", "default": "US"},
+                                    "bank_to_bank_instructions": {
+                                        "type": "string",
+                                        "description": "Additional instructions for the bank (optional)",
+                                    },
+                                    "intermediary_bank_name": {
+                                        "type": "string",
+                                        "description": "Name of intermediary bank if required (optional)",
+                                    },
+                                },
+                                "required": [
+                                    "account_name",
+                                    "address_1",
+                                    "country",
+                                    "bank_name",
+                                    "account_number",
+                                    "routing_number",
+                                    "account_type",
+                                    "bank_country",
+                                ],
+                            },
+                        },
+                        "required": [
+                            "company_id",
+                            "investment_id",
+                            "dollar_amount",
+                            "wiring_instructions",
+                        ],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_companies",
+                    "description": "Search for companies by name or other criteria to get their IDs",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Name or part of name to search for",
+                            },
+                            "batch": {
+                                "type": "string",
+                                "description": 'Optional batch filter (e.g., "W21", "S22")',
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": [
+                                    "live",
+                                    "dead",
+                                    "adrift",
+                                    "exited",
+                                    "went_public",
+                                    "all",
+                                ],
+                                "description": "Filter by company status",
+                                "default": "live",
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 10,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {
+                            "status": {
+                                "type": "string",
+                                "description": "Success or error status",
+                            },
+                            "results": {
+                                "type": "array",
+                                "description": "List of companies matching the search criteria",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {
+                                            "type": "integer",
+                                            "description": "Company ID to use in other API calls",
+                                        },
+                                        "name": {"type": "string"},
+                                        "batch": {"type": "string"},
+                                        "status": {"type": "string"},
+                                        "valuation": {"type": "string"},
+                                        "url": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "founders": {"type": "string"},
+                                    },
+                                },
+                            },
+                            "results_count": {
+                                "type": "integer",
+                                "description": "Number of companies returned",
+                            },
+                            "total_matches": {
+                                "type": "integer",
+                                "description": "Total number of matches found",
+                            },
+                        },
+                    },
+                },
+            },
+        ],
+        "tool_choice": None,
+        "max_retries": 0,
+        "logprobs": None,
+        "top_logprobs": None,
+        "extra_headers": None,
+        "api_version": None,
+        "parallel_tool_calls": None,
+        "drop_params": True,
+        "reasoning_effort": None,
+        "additional_drop_params": None,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an AI assistant that helps prepare a wire for a pro rata investment.",
+            },
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+        "thinking": None,
+        "kwargs": {},
+    }
+    optional_params = get_optional_params(**passed_params)
+    print(f"optional_params: {optional_params}")
+
+    assert "max_tokens_to_sample" not in optional_params
+    assert optional_params["max_tokens"] == 1024
+
+
+def test_azure_modalities_param():
+    optional_params = get_optional_params(
+        model="chatgpt-v2",
+        custom_llm_provider="azure",
+        modalities=["text", "audio"],
+        audio={"type": "audio_input", "input": "test.wav"},
+    )
+    assert optional_params["modalities"] == ["text", "audio"]
+    assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
+
+def test_litellm_proxy_thinking_param():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="litellm_proxy",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+def test_gemini_modalities_param():
+    optional_params = get_optional_params(
+        model="gemini-1.5-pro",
+        custom_llm_provider="gemini",
+        modalities=["text", "image"],
+    )
+
+    assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
+    
+
+
+
+def test_azure_response_format_param():
+    optional_params = litellm.get_optional_params(
+        model="azure/o_series/test-o3-mini",
+        custom_llm_provider="azure/o_series",
+        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    )
+
+    
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
+        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
+        ("claude-3-7-sonnet@20250219", "vertex_ai"),
+    ],
+)
+def test_anthropic_unified_reasoning_content(model, provider):
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider=provider,
+        reasoning_effort="high",
+    )
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+
+def test_azure_response_format(monkeypatch):
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
+    optional_params = get_optional_params(
+        model="azure/gpt-4o-mini",
+        custom_llm_provider="azure",
+        response_format={"type": "json_object"},
+    )
+    assert optional_params["response_format"] == {"type": "json_object"}

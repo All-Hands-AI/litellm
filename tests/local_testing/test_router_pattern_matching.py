@@ -13,10 +13,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import Router
-from litellm.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.router import Deployment, LiteLLM_Params
+from litellm.types.router import ModelInfo
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from dotenv import load_dotenv
+from unittest.mock import patch, MagicMock, AsyncMock
 
 load_dotenv()
 
@@ -132,7 +134,7 @@ def test_route_with_multiple_matching_patterns():
     router.add_pattern("openai/*", deployment1.to_json(exclude_none=True))
     router.add_pattern("openai/gpt-*", deployment2.to_json(exclude_none=True))
     assert router.route("openai/gpt-3.5-turbo") == [
-        deployment1.to_json(exclude_none=True)
+        deployment2.to_json(exclude_none=True)
     ]
 
 
@@ -155,3 +157,160 @@ def test_route_with_exception():
 
     result = router.route("openai/gpt-3.5-turbo")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_route_with_no_matching_pattern():
+    """
+    Tests that the router returns None when there is no matching pattern
+    """
+    from litellm.types.router import RouterErrors
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "*meta.llama3*",
+                "litellm_params": {"model": "bedrock/meta.llama3*"},
+            }
+        ]
+    )
+
+    ## WORKS
+    result = await router.acompletion(
+        model="bedrock/meta.llama3-70b",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Works",
+    )
+    assert result.choices[0].message.content == "Works"
+
+    ## WORKS
+    result = await router.acompletion(
+        model="meta.llama3-70b-instruct-v1:0",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="Works",
+    )
+    assert result.choices[0].message.content == "Works"
+
+    ## FAILS
+    with pytest.raises(litellm.BadRequestError) as e:
+        await router.acompletion(
+            model="my-fake-model",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response="Works",
+        )
+
+    assert RouterErrors.no_deployments_available.value not in str(e.value)
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.aembedding(
+            model="my-fake-model",
+            input="Hello, world!",
+        )
+
+
+def test_router_pattern_match_e2e():
+    """
+    Tests the end to end flow of the router
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "llmengine/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "test"},
+            }
+        ]
+    )
+
+    with patch.object(client, "post", new=MagicMock()) as mock_post:
+
+        router.completion(
+            model="llmengine/my-custom-model",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            client=client,
+            api_key="test",
+        )
+        mock_post.assert_called_once()
+        print(mock_post.call_args.kwargs["data"])
+        mock_post.call_args.kwargs["data"] == {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hello, how are you?"}],
+        }
+
+
+def test_pattern_matching_router_with_default_wildcard():
+    """
+    Tests that the router returns the default wildcard model when the pattern is not found
+
+    Make sure generic '*' allows all models to be passed through.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "*"},
+                "model_info": {"access_groups": ["default"]},
+            },
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {"model": "anthropic/claude-3-5-sonnet"},
+            },
+        ]
+    )
+
+    assert len(router.pattern_router.patterns) > 0
+
+    router.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "Hello, how are you?"}],
+    )
+
+
+def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
+    """
+    Match to more specific pattern first.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "*"},
+                "model_info": {"access_groups": ["default"]},
+            },
+            {
+                "model_name": "llmengine/*",
+                "litellm_params": {"model": "openai/*"},
+            },
+        ]
+    )
+
+    assert len(router.pattern_router.patterns) > 0
+
+    pattern_router = router.pattern_router
+    deployments = pattern_router.route("llmengine/gpt-3.5-turbo")
+    assert len(deployments) == 1
+    assert deployments[0]["model_name"] == "llmengine/*"
+
+
+def test_sorted_patterns():
+    """
+    Tests that the pattern specificity is calculated correctly
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
+    sorted_patterns = PatternUtils.sorted_patterns(
+        {
+            "llmengine/*": [{"model_name": "anthropic/claude-3-5-sonnet"}],
+            "*": [{"model_name": "openai/*"}],
+        },
+    )
+    assert sorted_patterns[0][0] == "llmengine/*"
+
+
+def test_calculate_pattern_specificity():
+    from litellm.router_utils.pattern_match_deployments import PatternUtils
+
+    assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
+    assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)

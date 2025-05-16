@@ -3,18 +3,66 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from pydantic import BaseModel, validator
 from typing_extensions import Literal, Required, TypedDict
 
-from .openai import ChatCompletionCachedContent
+from .openai import ChatCompletionCachedContent, ChatCompletionThinkingBlock
 
 
 class AnthropicMessagesToolChoice(TypedDict, total=False):
     type: Required[Literal["auto", "any", "tool"]]
     name: str
+    disable_parallel_tool_use: bool  # default is false
+
+
+class AnthropicInputSchema(TypedDict, total=False):
+    type: Optional[str]
+    properties: Optional[dict]
+    additionalProperties: Optional[bool]
 
 
 class AnthropicMessagesTool(TypedDict, total=False):
     name: Required[str]
     description: str
-    input_schema: Required[dict]
+    input_schema: Optional[AnthropicInputSchema]
+    type: Literal["custom"]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class AnthropicComputerTool(TypedDict, total=False):
+    display_width_px: Required[int]
+    display_height_px: Required[int]
+    display_number: int
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    type: Required[str]
+    name: Required[str]
+
+
+class AnthropicWebSearchUserLocation(TypedDict, total=False):
+    city: Optional[str]
+    country: Optional[str]
+    region: Optional[str]
+    timezone: Optional[str]
+    type: Required[Literal["approximate"]]
+
+
+class AnthropicWebSearchTool(TypedDict, total=False):
+    name: Required[Literal["web_search"]]
+    type: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    max_uses: Optional[int]
+    user_location: Optional[AnthropicWebSearchUserLocation]
+
+
+class AnthropicHostedTools(TypedDict, total=False):  # for bash_tool and text_editor
+    type: Required[str]
+    name: Required[str]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+AllAnthropicToolsValues = Union[
+    AnthropicComputerTool,
+    AnthropicHostedTools,
+    AnthropicMessagesTool,
+    AnthropicWebSearchTool,
+]
 
 
 class AnthropicMessagesTextParam(TypedDict, total=False):
@@ -23,16 +71,18 @@ class AnthropicMessagesTextParam(TypedDict, total=False):
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
-class AnthropicMessagesToolUseParam(TypedDict):
+class AnthropicMessagesToolUseParam(TypedDict, total=False):
     type: Required[Literal["tool_use"]]
     id: str
     name: str
     input: dict
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
 AnthropicMessagesAssistantMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesToolUseParam,
+    ChatCompletionThinkingBlock,
 ]
 
 
@@ -51,7 +101,7 @@ class AnthopicMessagesAssistantMessageParam(TypedDict, total=False):
     """
 
 
-class AnthropicImageParamSource(TypedDict):
+class AnthropicContentParamSource(TypedDict):
     type: Literal["base64"]
     media_type: str
     data: str
@@ -59,8 +109,21 @@ class AnthropicImageParamSource(TypedDict):
 
 class AnthropicMessagesImageParam(TypedDict, total=False):
     type: Required[Literal["image"]]
-    source: Required[AnthropicImageParamSource]
+    source: Required[AnthropicContentParamSource]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+
+
+class CitationsObject(TypedDict):
+    enabled: bool
+
+
+class AnthropicMessagesDocumentParam(TypedDict, total=False):
+    type: Required[Literal["document"]]
+    source: Required[AnthropicContentParamSource]
+    cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
+    title: str
+    context: str
+    citations: Optional[CitationsObject]
 
 
 class AnthropicMessagesToolResultContent(TypedDict):
@@ -85,6 +148,7 @@ AnthropicMessagesUserMessageValues = Union[
     AnthropicMessagesTextParam,
     AnthropicMessagesImageParam,
     AnthropicMessagesToolResultParam,
+    AnthropicMessagesDocumentParam,
 ]
 
 
@@ -108,22 +172,23 @@ AllAnthropicMessageValues = Union[
 ]
 
 
-class AnthropicMessageRequestBase(TypedDict, total=False):
-    messages: Required[List[AllAnthropicMessageValues]]
-    max_tokens: Required[int]
-    metadata: AnthropicMetadata
-    stop_sequences: List[str]
-    stream: bool
-    system: Union[str, List]
-    temperature: float
-    tool_choice: AnthropicMessagesToolChoice
-    tools: List[AnthropicMessagesTool]
-    top_k: int
-    top_p: float
+class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
+    max_tokens: Optional[int]
+    metadata: Optional[Union[AnthropicMetadata, Dict]]
+    stop_sequences: Optional[List[str]]
+    stream: Optional[bool]
+    system: Optional[Union[str, List]]
+    temperature: Optional[float]
+    thinking: Optional[Dict]
+    tool_choice: Optional[Union[AnthropicMessagesToolChoice, Dict]]
+    tools: Optional[List[Union[AllAnthropicToolsValues, Dict]]]
+    top_k: Optional[int]
+    top_p: Optional[float]
 
 
-class AnthropicMessagesRequest(AnthropicMessageRequestBase, total=False):
+class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
     model: Required[str]
+    messages: Required[Union[List[AllAnthropicMessageValues], List[Dict]]]
     # litellm param - used for tracking litellm proxy metadata in the request
     litellm_metadata: dict
 
@@ -135,6 +200,11 @@ class ContentTextBlockDelta(TypedDict):
 
     type: str
     text: str
+
+
+class ContentCitationsBlockDelta(TypedDict):
+    type: Literal["citations"]
+    citation: dict
 
 
 class ContentJsonBlockDelta(TypedDict):
@@ -149,7 +219,9 @@ class ContentJsonBlockDelta(TypedDict):
 class ContentBlockDelta(TypedDict):
     type: Literal["content_block_delta"]
     index: int
-    delta: Union[ContentTextBlockDelta, ContentJsonBlockDelta]
+    delta: Union[
+        ContentTextBlockDelta, ContentJsonBlockDelta, ContentCitationsBlockDelta
+    ]
 
 
 class ContentBlockStop(TypedDict):
@@ -298,3 +370,18 @@ from .openai import ChatCompletionUsageBlock
 class AnthropicChatCompletionUsageBlock(ChatCompletionUsageBlock, total=False):
     cache_creation_input_tokens: int
     cache_read_input_tokens: int
+
+
+ANTHROPIC_API_HEADERS = {
+    "anthropic-version",
+    "anthropic-beta",
+}
+
+ANTHROPIC_API_ONLY_HEADERS = {  # fails if calling anthropic on vertex ai / bedrock
+    "anthropic-beta",
+}
+
+
+class AnthropicThinkingParam(TypedDict, total=False):
+    type: Literal["enabled"]
+    budget_tokens: int

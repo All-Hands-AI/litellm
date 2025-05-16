@@ -108,6 +108,24 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
 <TabItem value="hugging" label="HuggingFace">
 
 ```python
@@ -177,6 +195,22 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="novita" label="Novita AI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita-api-key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
 
 </Tabs>
 
@@ -236,6 +270,24 @@ response = completion(
 )
 ```
 
+</TabItem>
+
+<TabItem value="nvidia" label="NVIDIA">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["NVIDIA_NIM_API_KEY"] = "nvidia_api_key"
+os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
+
+response = completion(
+  model="nvidia_nim/<model_name>",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  stream=True,
+)
+```
 </TabItem>
 
 <TabItem value="hugging" label="HuggingFace">
@@ -311,7 +363,23 @@ response = completion(
 ```
 
 </TabItem>
+<TabItem value="novita" label="Novita AI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://novita.ai/settings/key-management to get your API key
+os.environ["NOVITA_API_KEY"] = "novita_api_key"
+
+response = completion(
+  model="novita/deepseek/deepseek-r1",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
 </Tabs>
 
 ### Exception handling 
@@ -331,21 +399,21 @@ except OpenAIError as e:
 ```
 
 ### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to MLflow, Lunary, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 
 ```python
 from litellm import completion
 
-## set env variables for logging tools
+## set env variables for logging tools (API key set up is not required when using MLflow)
+os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key" # get your key at https://app.lunary.ai/settings
 os.environ["HELICONE_API_KEY"] = "your-helicone-key"
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
-os.environ["LUNARY_PUBLIC_KEY"] = "your-lunary-public-key"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["lunary", "langfuse", "helicone"] # log input/output to lunary, langfuse, supabase, helicone
+litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to lunary, mlflow, langfuse, helicone
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])

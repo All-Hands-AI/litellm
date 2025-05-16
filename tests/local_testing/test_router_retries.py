@@ -166,7 +166,7 @@ async def test_router_retry_policy(error_type):
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -175,7 +175,7 @@ async def test_router_retry_policy(error_type):
             {
                 "model_name": "bad-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -275,7 +275,7 @@ async def test_dynamic_router_retry_policy(model_group):
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -287,7 +287,7 @@ async def test_dynamic_router_retry_policy(model_group):
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -299,7 +299,7 @@ async def test_dynamic_router_retry_policy(model_group):
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -311,7 +311,7 @@ async def test_dynamic_router_retry_policy(model_group):
             {
                 "model_name": "bad-model",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -393,7 +393,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -426,7 +426,7 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -459,14 +459,14 @@ def test_raise_context_window_exceeded_error():
         llm_provider="azure",
         model="gpt-3.5-turbo",
     )
-    context_window_fallbacks = [{"gpt-3.5-turbo": ["azure/chatgpt-v-2"]}]
+    context_window_fallbacks = [{"gpt-3.5-turbo": ["azure/chatgpt-v-3"]}]
 
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -508,7 +508,7 @@ def test_raise_context_window_exceeded_error_no_retry():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -539,45 +539,71 @@ def test_raise_context_window_exceeded_error_no_retry():
 """
 
 
-def test_timeout_for_rate_limit_error_with_healthy_deployments():
+@pytest.mark.parametrize("num_deployments, expected_timeout", [(1, 60), (2, 0.0)])
+def test_timeout_for_rate_limit_error_with_healthy_deployments(
+    num_deployments, expected_timeout
+):
     """
     Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
     """
-    healthy_deployments = [
-        "deployment1",
-        "deployment2",
-    ]  # multiple healthy deployments mocked up
-    fallbacks = None
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
-            }
-        ]
+    cooldown_time = 60
+    rate_limit_error = litellm.RateLimitError(
+        message="{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
+        llm_provider="",
+        model="gpt-3.5-turbo",
+        response=httpx.Response(
+            status_code=429,
+            content="",
+            headers={"retry-after": str(cooldown_time)},  # type: ignore
+            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
+        ),
     )
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-3",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+        }
+    ]
+    if num_deployments == 2:
+        model_list.append(
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        )
+
+    router = litellm.Router(model_list=model_list)
 
     _timeout = router._time_to_sleep_before_retry(
         e=rate_limit_error,
-        remaining_retries=4,
-        num_retries=4,
-        healthy_deployments=healthy_deployments,
+        remaining_retries=2,
+        num_retries=2,
+        healthy_deployments=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "api_key": "my-key",
+                    "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
+                    "model": "azure/chatgpt-v-3",
+                },
+                "model_info": {
+                    "id": "0e30bc8a63fa91ae4415d4234e231b3f9e6dd900cac57d118ce13a720d95e9d6",
+                    "db_model": False,
+                },
+            }
+        ],
+        all_deployments=model_list,
     )
 
-    print(
-        "timeout=",
-        _timeout,
-        "error is rate_limit_error and there are healthy deployments=",
-        healthy_deployments,
-    )
-
-    assert _timeout == 0.0
+    if expected_timeout == 0.0:
+        assert _timeout == expected_timeout
+    else:
+        assert _timeout > 0.0
 
 
 def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
@@ -585,26 +611,26 @@ def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
     Test 2. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0
     """
     healthy_deployments = []
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-3",
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE"),
+            },
+        }
+    ]
 
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
-            }
-        ]
-    )
+    router = litellm.Router(model_list=model_list)
 
     _timeout = router._time_to_sleep_before_retry(
         e=rate_limit_error,
         remaining_retries=4,
         num_retries=4,
         healthy_deployments=healthy_deployments,
+        all_deployments=model_list,
     )
 
     print(
@@ -624,7 +650,7 @@ def test_no_retry_for_not_found_error_404():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -683,7 +709,7 @@ def test_no_retry_when_no_healthy_deployments():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -707,3 +733,73 @@ def test_no_retry_when_no_healthy_deployments():
             )
         except Exception as e:
             print("got exception", e)
+
+
+@pytest.mark.asyncio
+async def test_router_retries_model_specific_and_global():
+    from unittest.mock import patch, MagicMock
+
+    litellm.num_retries = 0
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "num_retries": 1,
+                },
+            }
+        ]
+    )
+
+    with patch.object(
+        router, "_time_to_sleep_before_retry"
+    ) as mock_async_function_with_retries:
+        try:
+            await router.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                mock_response="litellm.RateLimitError",
+            )
+        except Exception as e:
+            print("got exception", e)
+
+        mock_async_function_with_retries.assert_called_once()
+
+        assert mock_async_function_with_retries.call_args.kwargs["num_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_timeout_model_specific_and_global():
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-5-sonnet-20240620",
+                    "timeout": 1,
+                },
+            }
+        ],
+        timeout=10,
+    )
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            await router.acompletion(
+                model="anthropic-claude",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client,
+            )
+        except Exception as e:
+            print("got exception", e)
+
+        mock_client.assert_called()
+
+        assert mock_client.call_args.kwargs["timeout"] == 1

@@ -58,7 +58,7 @@ def test_caching_router():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-2",
+                    "model": "azure/chatgpt-v-3",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -99,3 +99,29 @@ def test_caching_router():
 
 
 # test_caching_router()
+@pytest.mark.asyncio
+async def test_redis_with_ssl():
+    """
+    Test connecting to redis connection pool when ssl=None
+
+
+    Relevant issue:
+        User was seeing this error: `TypeError: AbstractConnection.__init__() got an unexpected keyword argument 'ssl'`
+    """
+    from litellm._redis import get_redis_connection_pool, get_redis_async_client
+
+    # Get the connection pool with SSL
+    # REDIS_HOST_WITH_SSL is just a redis cloud instance with Transport layer security (TLS) enabled
+    pool = get_redis_connection_pool(
+        host=os.environ.get("REDIS_HOST_WITH_SSL"),
+        port=os.environ.get("REDIS_PORT_WITH_SSL"),
+        password=os.environ.get("REDIS_PASSWORD_WITH_SSL"),
+        ssl=None,
+    )
+
+    # Create Redis client with the pool
+    redis_client = get_redis_async_client(connection_pool=pool)
+
+    print("pinging redis")
+    print(await redis_client.ping())
+    print("pinged redis")

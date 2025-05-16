@@ -7,21 +7,21 @@
 ## Reject a call if it contains a prompt injection attack.
 
 
-import json
-import re
-import traceback
 from difflib import SequenceMatcher
 from typing import List, Literal, Optional
 
 from fastapi import HTTPException
-from typing_extensions import overload
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.prompt_templates.factory import prompt_injection_detection_default_pt
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    prompt_injection_detection_default_pt,
+)
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
+from litellm.router import Router
 from litellm.utils import get_formatted_prompt
 
 
@@ -32,7 +32,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         prompt_injection_params: Optional[LiteLLMPromptInjectionParams] = None,
     ):
         self.prompt_injection_params = prompt_injection_params
-        self.llm_router: Optional[litellm.Router] = None
+        self.llm_router: Optional[Router] = None
 
         self.verbs = [
             "Ignore",
@@ -74,7 +74,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa
 
-    def update_environment(self, router: Optional[litellm.Router] = None):
+    def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
 
         if (
@@ -111,7 +111,9 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         return combinations
 
     def check_user_input_similarity(
-        self, user_input: str, similarity_threshold: float = 0.7
+        self,
+        user_input: str,
+        similarity_threshold: float = DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD,
     ) -> bool:
         user_input_lower = user_input.lower()
         keywords = self.generate_injection_keywords()
@@ -197,7 +199,6 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             return data
 
         except HTTPException as e:
-
             if (
                 e.status_code == 400
                 and isinstance(e.detail, dict)

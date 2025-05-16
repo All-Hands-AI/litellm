@@ -10,12 +10,11 @@ Has 4 methods:
 """
 
 import ast
+import asyncio
 import json
-from typing import Any, Optional
+from typing import Optional
 
-import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.types.caching import LiteLLMCacheType
 
 from .base_cache import BaseCache
 
@@ -102,7 +101,6 @@ class S3Cache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def get_cache(self, key, **kwargs):
-        import boto3
         import botocore
 
         try:
@@ -125,7 +123,7 @@ class S3Cache(BaseCache):
                     )  # Convert string to dictionary
                 except Exception:
                     cached_response = ast.literal_eval(cached_response)
-            if type(cached_response) is not dict:
+            if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
                 f"Got S3 Cache: key: {key}, cached_response {cached_response}. Type Response {type(cached_response)}"
@@ -153,3 +151,9 @@ class S3Cache(BaseCache):
 
     async def disconnect(self):
         pass
+
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        tasks = []
+        for val in cache_list:
+            tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+        await asyncio.gather(*tasks)

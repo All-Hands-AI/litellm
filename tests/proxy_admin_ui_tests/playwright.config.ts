@@ -13,6 +13,8 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e_ui_tests',
+  testIgnore: ['**/tests/pass_through_tests/**', '../pass_through_tests/**/*'],
+  testMatch: '**/*.spec.ts',  // Only run files ending in .spec.ts
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
@@ -69,7 +71,10 @@ export default defineConfig({
     //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
     // },
   ],
-
+  timeout: 4*60*1000,
+  expect: {
+    timeout: 10 * 1000
+  }
   /* Run your local dev server before starting the tests */
   // webServer: {
   //   command: 'npm run start',

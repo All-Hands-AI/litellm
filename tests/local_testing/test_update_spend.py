@@ -41,7 +41,8 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     info_key_fn,
     update_key_fn,
 )
-from litellm.proxy.proxy_server import block_user, user_api_key_auth
+from litellm.proxy.proxy_server import user_api_key_auth
+from litellm.proxy.management_endpoints.customer_endpoints import block_user
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     spend_key_fn,
     spend_user_fn,
@@ -61,6 +62,8 @@ from litellm.proxy._types import (
     KeyRequest,
     NewUserRequest,
     UpdateKeyRequest,
+    SpendUpdateQueueItem,
+    Litellm_EntityType,
 )
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -92,7 +95,13 @@ def prisma_client():
 
 @pytest.mark.asyncio
 async def test_batch_update_spend(prisma_client):
-    prisma_client.user_list_transactons["test-litellm-user-5"] = 23
+    await proxy_logging_obj.db_spend_update_writer.spend_update_queue.add_update(
+        SpendUpdateQueueItem(
+            entity_type=Litellm_EntityType.USER,
+            entity_id="test-litellm-user-5",
+            response_cost=23,
+        )
+    )
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()

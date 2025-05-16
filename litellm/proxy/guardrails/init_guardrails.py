@@ -1,8 +1,6 @@
 import importlib
-import traceback
-from typing import Dict, List, Literal, Optional
-
-from pydantic import BaseModel, RootModel
+import os
+from typing import Dict, List, Optional
 
 import litellm
 from litellm import get_secret
@@ -17,8 +15,9 @@ from litellm.types.guardrails import (
     GuardrailItemSpec,
     LakeraCategoryThresholds,
     LitellmParams,
-    SupportedGuardrailIntegrations,
 )
+
+from .guardrail_registry import guardrail_initializer_registry
 
 all_guardrails: List[GuardrailItem] = []
 
@@ -86,26 +85,42 @@ Map guardrail_name: <pre_call>, <post_call>, during_call
 """
 
 
-def init_guardrails_v2(  # noqa: PLR0915
+def init_guardrails_v2(
     all_guardrails: List[Dict],
     config_file_path: Optional[str] = None,
 ):
-    # Convert the loaded data to the TypedDict structure
-    guardrail_list = []
+    guardrail_list: List[Guardrail] = []
 
-    # Parse each guardrail and replace environment variables
     for guardrail in all_guardrails:
+        initialized_guardrail = InitializeGuardrails.initialize_guardrail(
+            guardrail=guardrail,
+            config_file_path=config_file_path,
+        )
+        if initialized_guardrail:
+            guardrail_list.append(initialized_guardrail)
 
-        # Init litellm params for guardrail
+    verbose_proxy_logger.info(f"\nGuardrail List:{guardrail_list}\n")
+
+
+class InitializeGuardrails:
+    """
+    Class that handles initializing guardrails and adding them to the CallbackManager
+    """
+
+    @staticmethod
+    def initialize_guardrail(
+        guardrail: Dict,
+        config_file_path: Optional[str] = None,
+    ) -> Optional[Guardrail]:
+        """
+        Initialize a guardrail from a dictionary and add it to the litellm callback manager
+
+        Returns a Guardrail object if the guardrail is initialized successfully
+        """
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
-        _litellm_params_kwargs = {
-            k: litellm_params_data[k] if k in litellm_params_data else None
-            for k in LitellmParams.__annotations__.keys()
-        }
-
-        litellm_params = LitellmParams(**_litellm_params_kwargs)  # type: ignore
+        litellm_params = LitellmParams(**litellm_params_data)
 
         if (
             "category_thresholds" in litellm_params_data
@@ -114,171 +129,89 @@ def init_guardrails_v2(  # noqa: PLR0915
             lakera_category_thresholds = LakeraCategoryThresholds(
                 **litellm_params_data["category_thresholds"]
             )
-            litellm_params["category_thresholds"] = lakera_category_thresholds
+            litellm_params.category_thresholds = lakera_category_thresholds
 
-        if litellm_params["api_key"]:
-            if litellm_params["api_key"].startswith("os.environ/"):
-                litellm_params["api_key"] = str(get_secret(litellm_params["api_key"]))  # type: ignore
+        if litellm_params.api_key and litellm_params.api_key.startswith("os.environ/"):
+            litellm_params.api_key = str(get_secret(litellm_params.api_key))
 
-        if litellm_params["api_base"]:
-            if litellm_params["api_base"].startswith("os.environ/"):
-                litellm_params["api_base"] = str(get_secret(litellm_params["api_base"]))  # type: ignore
-
-        # Init guardrail CustomLoggerClass
-        if litellm_params["guardrail"] == SupportedGuardrailIntegrations.APORIA.value:
-            from litellm.proxy.guardrails.guardrail_hooks.aporia_ai import (
-                AporiaGuardrail,
-            )
-
-            _aporia_callback = AporiaGuardrail(
-                api_base=litellm_params["api_base"],
-                api_key=litellm_params["api_key"],
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-            )
-            litellm.callbacks.append(_aporia_callback)  # type: ignore
-        elif (
-            litellm_params["guardrail"] == SupportedGuardrailIntegrations.BEDROCK.value
+        if litellm_params.api_base and litellm_params.api_base.startswith(
+            "os.environ/"
         ):
-            from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
-                BedrockGuardrail,
+            litellm_params.api_base = str(get_secret(litellm_params.api_base))
+
+        guardrail_type = litellm_params.guardrail
+        if guardrail_type is None:
+            raise ValueError("guardrail_type is required")
+
+        initializer = guardrail_initializer_registry.get(guardrail_type)
+
+        if initializer:
+            initializer(litellm_params, guardrail)
+        elif isinstance(guardrail_type, str) and "." in guardrail_type:
+            InitializeGuardrails.initialize_custom_guardrail(
+                guardrail=guardrail,
+                guardrail_type=guardrail_type,
+                litellm_params=litellm_params,
+                config_file_path=config_file_path,
             )
-
-            _bedrock_callback = BedrockGuardrail(
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-                guardrailIdentifier=litellm_params["guardrailIdentifier"],
-                guardrailVersion=litellm_params["guardrailVersion"],
-            )
-            litellm.callbacks.append(_bedrock_callback)  # type: ignore
-        elif litellm_params["guardrail"] == SupportedGuardrailIntegrations.LAKERA.value:
-            from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import (
-                lakeraAI_Moderation,
-            )
-
-            _lakera_callback = lakeraAI_Moderation(
-                api_base=litellm_params["api_base"],
-                api_key=litellm_params["api_key"],
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-                category_thresholds=litellm_params.get("category_thresholds"),
-            )
-            litellm.callbacks.append(_lakera_callback)  # type: ignore
-        elif (
-            litellm_params["guardrail"] == SupportedGuardrailIntegrations.PRESIDIO.value
-        ):
-            from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-                _OPTIONAL_PresidioPIIMasking,
-            )
-
-            _presidio_callback = _OPTIONAL_PresidioPIIMasking(
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-                output_parse_pii=litellm_params["output_parse_pii"],
-                presidio_ad_hoc_recognizers=litellm_params[
-                    "presidio_ad_hoc_recognizers"
-                ],
-                mock_redacted_text=litellm_params.get("mock_redacted_text") or None,
-            )
-
-            if litellm_params["output_parse_pii"] is True:
-                _success_callback = _OPTIONAL_PresidioPIIMasking(
-                    output_parse_pii=True,
-                    guardrail_name=guardrail["guardrail_name"],
-                    event_hook=GuardrailEventHooks.post_call.value,
-                    presidio_ad_hoc_recognizers=litellm_params[
-                        "presidio_ad_hoc_recognizers"
-                    ],
-                )
-
-                litellm.callbacks.append(_success_callback)  # type: ignore
-
-            litellm.callbacks.append(_presidio_callback)  # type: ignore
-        elif (
-            litellm_params["guardrail"]
-            == SupportedGuardrailIntegrations.HIDE_SECRETS.value
-        ):
-            from enterprise.enterprise_hooks.secret_detection import (
-                _ENTERPRISE_SecretDetection,
-            )
-
-            _secret_detection_object = _ENTERPRISE_SecretDetection(
-                detect_secrets_config=litellm_params.get("detect_secrets_config"),
-                event_hook=litellm_params["mode"],
-                guardrail_name=guardrail["guardrail_name"],
-            )
-
-            litellm.callbacks.append(_secret_detection_object)  # type: ignore
-        elif (
-            litellm_params["guardrail"]
-            == SupportedGuardrailIntegrations.GURDRAILS_AI.value
-        ):
-            from litellm.proxy.guardrails.guardrail_hooks.guardrails_ai import (
-                GuardrailsAI,
-            )
-
-            _guard_name = litellm_params.get("guard_name")
-            if _guard_name is None:
-                raise Exception(
-                    "GuardrailsAIException - Please pass the Guardrails AI guard name via 'litellm_params::guard_name'"
-                )
-            _guardrails_ai_callback = GuardrailsAI(
-                api_base=litellm_params.get("api_base"),
-                guard_name=_guard_name,
-                guardrail_name=SupportedGuardrailIntegrations.GURDRAILS_AI.value,
-            )
-
-            litellm.callbacks.append(_guardrails_ai_callback)  # type: ignore
-        elif (
-            isinstance(litellm_params["guardrail"], str)
-            and "." in litellm_params["guardrail"]
-        ):
-            if config_file_path is None:
-                raise Exception(
-                    "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
-                )
-            import os
-
-            from litellm.proxy.utils import get_instance_fn
-
-            # Custom guardrail
-            _guardrail = litellm_params["guardrail"]
-            _file_name, _class_name = _guardrail.split(".")
-            verbose_proxy_logger.debug(
-                "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
-                _guardrail,
-                _file_name,
-                _class_name,
-            )
-
-            directory = os.path.dirname(config_file_path)
-            module_file_path = os.path.join(directory, _file_name)
-            module_file_path += ".py"
-
-            spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
-            if spec is None:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
-
-            module = importlib.util.module_from_spec(spec)  # type: ignore
-            spec.loader.exec_module(module)  # type: ignore
-            _guardrail_class = getattr(module, _class_name)
-
-            _guardrail_callback = _guardrail_class(
-                guardrail_name=guardrail["guardrail_name"],
-                event_hook=litellm_params["mode"],
-            )
-            litellm.callbacks.append(_guardrail_callback)  # type: ignore
         else:
-            raise ValueError(f"Unsupported guardrail: {litellm_params['guardrail']}")
+            raise ValueError(f"Unsupported guardrail: {guardrail_type}")
 
         parsed_guardrail = Guardrail(
             guardrail_name=guardrail["guardrail_name"],
             litellm_params=litellm_params,
         )
 
-        guardrail_list.append(parsed_guardrail)
-        guardrail["guardrail_name"]
-    # pretty print guardrail_list in green
-    print(f"\nGuardrail List:{guardrail_list}\n")  # noqa
+        return parsed_guardrail
+
+    @staticmethod
+    def initialize_custom_guardrail(
+        guardrail: Dict,
+        guardrail_type: str,
+        litellm_params: LitellmParams,
+        config_file_path: Optional[str] = None,
+    ) -> None:
+        """
+        Initialize a Custom Guardrail from a python file
+
+        This initializes it by adding it to the litellm callback manager
+        """
+        if not config_file_path:
+            raise Exception(
+                "GuardrailsAIException - Please pass the config_file_path to initialize_guardrails_v2"
+            )
+
+        _file_name, _class_name = guardrail_type.split(".")
+        verbose_proxy_logger.debug(
+            "Initializing custom guardrail: %s, file_name: %s, class_name: %s",
+            guardrail_type,
+            _file_name,
+            _class_name,
+        )
+
+        directory = os.path.dirname(config_file_path)
+        module_file_path = os.path.join(directory, _file_name) + ".py"
+
+        spec = importlib.util.spec_from_file_location(_class_name, module_file_path)  # type: ignore
+        if not spec:
+            raise ImportError(
+                f"Could not find a module specification for {module_file_path}"
+            )
+
+        module = importlib.util.module_from_spec(spec)  # type: ignore
+        spec.loader.exec_module(module)  # type: ignore
+        _guardrail_class = getattr(module, _class_name)
+
+        mode = litellm_params.mode
+        if mode is None:
+            raise ValueError(
+                f"mode is required for guardrail {guardrail_type} please set mode to one of the following: {', '.join(GuardrailEventHooks)}"
+            )
+
+        default_on = litellm_params.default_on
+        _guardrail_callback = _guardrail_class(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=mode,
+            default_on=default_on,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
